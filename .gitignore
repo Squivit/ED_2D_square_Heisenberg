@@ -1,2 +1,6 @@
 *.txt
 *.npz
+/big_N/ham_csr/
+/big_N/repr/
+data/
+old/
