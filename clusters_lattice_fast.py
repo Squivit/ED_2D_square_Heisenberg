@@ -19,7 +19,8 @@ import multiprocessing as mp
 
 class SpinConfiguration:
     
-    def __init__(self, N = 16, number = 'A', key = None, magnon_number = -1, delta = 1., lamb= 1., J2overJ1 = 1., lowest_eignstates = 1, print_data = False, tol : float = 1e-8):
+    def __init__(self, N = 16, number = 'A', key = None, magnon_number = -1, delta = 1., lamb= 1., k = np.array([0., 0.]),
+                 lowest_eignstates = 1, print_data = False):
         """
         k is in units of pi
         """
@@ -40,21 +41,20 @@ class SpinConfiguration:
             self.magnon_number = magnon_number
 
         self.delta = delta
-        self.j2 = J2overJ1
         self.lamb = lamb
+
+        self.k = k
         
-        side = 24
+        side = 18
         if self.n > 24:
             side = 32
-            print('WARNING! For more than 24 spin bigmap of size 24 might be too small!')
+            print('WARNING! For more than 24 spin bigmap of size 26 might be too small!')
         
         self.cluster = Cluster(N=self.n, num=number, key=key, bigmap_shift=0, bigmap_side=side)
         
         #get_betts_cluster(key, shift = 0, plot=True)
         #plt.show()
                 
-        self.tol = tol
-        
         self.weight_matrix = self.cluster.bosons_to_cluster_rolled(array([ 2**(ii-1) for ii in range(self.n, 0, -1)]))
         
         self.precompute_flips_change()
@@ -69,10 +69,8 @@ class SpinConfiguration:
             raise ValueError('Magnon number should be smaller than the system size')
         
         self.size = int(binom(self.n, self.magnon_number))
-        #self.generate_spin_configurations()
         self.get_representations()
 
-           
         start = time()
             
         self.generate_hamiltonian()
@@ -94,7 +92,7 @@ class SpinConfiguration:
         """
         
         if k is None:
-            k = np.array( [0, 0] )
+            k = self.k
 
         if lamb is not None:
             self.lamb = lamb
@@ -110,11 +108,8 @@ class SpinConfiguration:
         # Directions for Heisenberg exchange
         directions = [(-1, 0), (0, -1)]  # x and y directions
         flips = [self.flips_change_side, self.flips_change_up]  # x and y directions
-        interactions = [1., self.j2] # interactions in x and y axis
 
-        e0 = 1. * self.n
-        e0 += self.j2 * self.n
-        e0 *= self.delta / 4.
+        e0 = 2. * self.n * self.delta / 4.
 
         # Precompute mappings
         spin_confg_items = list(self.representatives.items())
@@ -125,6 +120,7 @@ class SpinConfiguration:
         cluster_map = self.cluster.cluster_map
         
         easy_ks = [0., 2.]
+        is_easy_k = easy_ks.__contains__(k[0]) and easy_ks.__contains__(k[1])
         flipped_states_elements = {}
         
         for config_int, state in tqdm(spin_confg_items, disable=not self.print):
@@ -150,15 +146,11 @@ class SpinConfiguration:
                     basis_index = map_int_to_basis(repr_b)
                     
                     if basis_index < state:
-                        phase = 0.
-                        if not (easy_ks.__contains__(k[0]) and easy_ks.__contains__(k[1])):
-                            for t in trans:
-                                phase += np.exp( -1j * np.pi * np.dot(k, t) )
-                            phase /= len(trans)
-                        else:
-                            phase = 1.
+                        phase = 1.
+                        if not is_easy_k:
+                            phase = np.mean([np.exp( -1j * np.pi * np.dot(k, t) ) for t in trans])
                         
-                        element = 0.5 * interactions[id] * phase * np.sqrt(self.norms[config_int]/self.norms[repr_b])
+                        element = 0.5 * phase * np.sqrt(self.norms[config_int]/self.norms[repr_b])
                         
                         # there is such a state in the list already
                         if flipped_states_elements.keys().__contains__(basis_index):
@@ -168,27 +160,31 @@ class SpinConfiguration:
                     
             
                 # Sz-Sz interaction energies
-                self_energy -= self.delta * 0.5 * interactions[id] * sum(mod(cluster_map*(config + roll_config), 2))
+                self_energy -= self.delta * 0.5 * sum(mod(cluster_map*(config + roll_config), 2))
 
                 if self.lamb != 1:
-                    self_energy -= interactions[id] * self.delta * (self.lamb - 1) * sum(cluster_map*(rot * roll(rot, dir, axis=(0, 1))))
+                    self_energy -= self.delta * (self.lamb - 1) * sum(cluster_map*(rot * roll(rot, dir, axis=(0, 1))))
 
             
             for basis_state, element in flipped_states_elements.items():
                 ham_i.append(state)
                 ham_j.append(basis_state)
                 hamiltonian_elements.append(element)            
-            
+
+                ham_i.append(basis_state)
+                ham_j.append(state)
+                hamiltonian_elements.append(np.conj(element))            
+
             ham_i.append(state)
             ham_j.append(state)
-            hamiltonian_elements.append(self_energy /2.)
-            
+            hamiltonian_elements.append(self_energy)
+        
         repr_size = len(self.representatives)
 
         if easy_ks.__contains__(k[0]) and easy_ks.__contains__(k[1]):
-            d_type = np.float32
+            d_type = np.float64
         else:
-            d_type = np.complex64
+            d_type = np.complex128
 
         self.hamiltonian = csr_matrix((array(hamiltonian_elements, dtype=d_type), (array(ham_i, dtype=int), array(ham_j, dtype=int))), shape=(repr_size, repr_size))
 
@@ -223,13 +219,10 @@ class SpinConfiguration:
 
         if n_lowest >= self.size:
             raise ValueError(f"Requested {n_lowest} eigenstates, but matrix size is {self.size}")
-
-        energies, states = eigsh(self.hamiltonian, k=n_lowest, which='SA', tol=self.tol)
-
-        # Make correct hamiltonian (now it's only up-triangle with diagonal reduced by a factor of 2)
-        H = (self.hamiltonian + np.conj(self.hamiltonian.T))
         
-        energies, states = eigsh(H, k=n_lowest, which='SA', tol=self.tol)
+        self.hamiltonian = (self.hamiltonian + self.hamiltonian.T.conj())/2
+
+        energies, states = eigsh(self.hamiltonian, k=n_lowest, which='SA', ncv = max(2*n_lowest + 1, 60), tol=1e-10)
 
         self.gs_energy = float(np.min(energies))
         self.gs_in_basis = states[:, np.argmin(energies)]
@@ -239,25 +232,8 @@ class SpinConfiguration:
             self.eignstates = states
             return energies, states
 
-
     def get_ground_state(self):
         return self.gs_energy, self.gs_in_basis
-
-    def generate_spin_configurations(self):
-        def bitmask(combo):
-            val = 0
-            for i in combo:
-                val |= 1 << (self.n - 1 - i)
-            return val
-
-        combos = list(combinations(range(self.n), self.magnon_number))
-        # dictionary where:
-        # keys: int representation
-        # values: number of the state in the basis
-        self.spin_confg = {bitmask(c): i for i, c in enumerate(combos)}
-
-        if self.print:
-            print(f"Generated {self.size} spin configurations")
     
         
     def get_representations(self, n_workers=None):
@@ -267,6 +243,7 @@ class SpinConfiguration:
         Args:
             n_workers: Number of parallel workers. None = use all CPU cores.
         """
+
         if n_workers is None:
             n_workers = mp.cpu_count()
         
@@ -274,22 +251,11 @@ class SpinConfiguration:
         cluster_map = self.cluster.cluster_map
         
         # Pre-compute translations (even only)
-        #translations = [trans for trans in coords if np.sum(trans) % 2 == 0]
-        translations = []
+        translations = [trans for trans in coords if np.sum(trans) % 2 == 0]
         
-        for t in coords:
-            if self.magnon_number != int(self.n / 2):
-                # allow only even translations, as rotation map is invariant to ONLY EVEN T
-                if np.sum(t) % 2 == 0:
-                    translations.append(t)
-            else:
-                # for S^z_tot = 0 also T_odd * I, where I -- spin inversion, allowed
-                translations.append(t)
-                
         # Pre-compute weight matrices and store as instance variable
-        # last value is whether the translation needs spin inversion
         self.weight_matrices = [
-            ((cluster_map * np.roll(self.weight_matrix, np.array(t), axis=(0, 1))).ravel(), t, np.sum(t)%2)
+            ((cluster_map * np.roll(self.weight_matrix, np.array(t), axis=(0, 1))).ravel(), t)
             for t in translations
         ]
         
@@ -320,6 +286,8 @@ class SpinConfiguration:
                 batch_results = future.result()
                 self._merge_results(batch_results)
         
+        self.representatives.sort()
+
         # Create final representative enumeration
         self.representatives = {r: i for i, r in enumerate(self.representatives)}
         
@@ -338,9 +306,7 @@ class SpinConfiguration:
     def _process_state_batch(self, states):
         """Process a batch of states."""
         results = []
-
-        h_size = 2**self.n - 1
-
+        
         for state_int in states:
             # Convert to config using the proper mapping
             state_cfg = self.map_int_to_config(state_int).ravel()
@@ -349,8 +315,8 @@ class SpinConfiguration:
             all_states = []
             is_representative = True
             
-            for w, trans, inv in self.weight_matrices:
-                rolled_state_int = int(h_size * inv + (1 - 2 * inv) * np.dot(w, state_cfg))
+            for w, trans in self.weight_matrices:
+                rolled_state_int = int(w @ state_cfg)
                 
                 if rolled_state_int < state_int:
                     is_representative = False
@@ -415,11 +381,49 @@ if __name__ == "__main__":
     N = 24
     num = 'A'
     
-    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, lowest_eignstates=1, delta=1., lamb=1., print_data=True)
+    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2), k=np.array([0., 0.]),
+                            lowest_eignstates=10, delta=1., lamb=1., print_data=True)
     min_e, gs_state = sc.get_ground_state()
-    
+
     print(f'Ground state energy E_0/J = {round(min_e, 5)}')
-    print(f'GS energy per-vertex: e_0/J = {round(-2*min_e/(N), 5)}')
+    print(f'GS energy per-site: e_0/J = {round(min_e/(N), 5)}')
+
+    raise ValueError
+
+    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)-1, k=np.array([2/3, 2/3]),
+                            lowest_eignstates=10, delta=1., lamb=0., print_data=True)
+    min_e_1, gs_state = sc.get_ground_state()
+
+    print(f'Ground state energy E_0/J = {round(min_e_1, 5)}')
+    print(f'GS energy per-site: e_0/J = {round(min_e_1/(N), 5)}')
+
+    print(f'Gap: {round(min_e_1 - min_e, 5)}')
     
     eign = sc.get_eigva_eigve(5)[0]
     print(np.round(eign, 6))
+
+    def get_gap_for_lamb(lamb = 0., samples : int = 10, eigvals : int = 10):
+        sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2), lowest_eignstates=eigvals, 
+                               delta=1., lamb=lamb, print_data=False)
+        min_e = sc.get_ground_state()[0]
+
+        sc_1 = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)-1, lowest_eignstates=eigvals,
+                                delta=1., lamb=lamb, print_data=False, k=(2/3, 2/3))#, E_guess = -12.)
+        min_e_1 = sc_1.get_ground_state()[0]
+
+        print(f'Ground state energy E_0/J = {round(min_e, 5)}')
+        print(f'Ground state energy E_0/J = {round(min_e_1, 5)}')
+        #print(f'GS energy per-vertex: e_0/J = {round(-2*min_e/(N), 5)}')
+        gaps = []
+        for _ in range(samples):
+            sc.get_eigva_eigve(eigvals)
+            min_e = sc.get_ground_state()[0]
+            sc_1.get_eigva_eigve(eigvals)
+            min_e_1 = sc_1.get_ground_state()[0]
+
+            gaps.append(round(min_e_1 - min_e, 5))
+            #print(f'Gap: {round(min_e_1 - min_e, 5)}')
+        print(gaps)
+
+    for ii in range(5):
+        get_gap_for_lamb(0., samples = 5, eigvals=10)

@@ -360,7 +360,7 @@ if __name__ == "__main__":
     ny = 4
     n = nx*ny
     
-    sc = SpinConfiguration(nx, ny, int(n/2), lowest_eignstates=1, delta=1., lamb=1., print_data=True)
+    sc = SpinConfiguration(nx, ny, int(n/2), lowest_eignstates=1, delta=1., lamb=0., print_data=False)
     min_e, gs_state = sc.get_ground_state()
     
     print(f'Ground state energy E_0/J = {round(min_e, 7)}')
@@ -368,7 +368,23 @@ if __name__ == "__main__":
     eign = sc.get_eigva_eigve(5)[0]
     print(np.round(eign, 6))
 
-    
+    neel_state = np.array( [ [ (1 + (-1)**(x + y))/2 for x in range(nx) ] for y in range(ny) ] ).reshape((ny, nx))
+    neel_basis = sc.map_config_to_basis(neel_state)
+    print(f'Neel state contribution to the ground state: {np.square(gs_state[neel_basis])}')
+    print(f'Maximum contribution of single representative to the ground state: {np.square(np.max(np.abs(gs_state)))}')
+    contr = np.square(np.abs(gs_state))
+    contr.sort()
+    print(contr[-5:])
+    indices = np.where(np.square(np.abs(gs_state)) > contr[-3])[0]
+    #indices = np.where(np.square(np.abs(gs_state)) > 0.037)[0]
+
+    for ind in indices:
+        print(np.where(list(sc.representatives.values()) == ind)[0][0])
+        cfg_int = list(sc.representatives.keys())[np.where(list(sc.representatives.values()) == ind)[0][0]]
+        print(cfg_int)
+        print(sc.map_int_to_config(cfg_int))
+
+    """
     m_s = 0
 
     rotation_map = sc.rotation_map
@@ -380,7 +396,7 @@ if __name__ == "__main__":
         m_s += np.square(np.abs(gs_state[ii])) * (np.mean(rot))
 
     print(m_s)
-    
+    """
     """
     for k in k_points:
         print(f'k=({'𝛑/' + str(int(1/k[0])) if k[0] % 1 != 0 else '0' if k[0] == 0 else str(int(k[0])) + '𝛑'}, {'𝛑/' + str(int(1/k[1])) if k[1] % 1 != 0 else '0' if k[1] == 0 else str(int(k[1])) + '𝛑'})')

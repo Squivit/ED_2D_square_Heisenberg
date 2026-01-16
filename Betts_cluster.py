@@ -340,6 +340,10 @@ def get_betts_cluster(betts_key = '26A', shift = 0, plot = False):
             if inside:
                 pts.append( [x, y] )
 
+    # temporary solution
+    if betts_key == '24A':
+        pts = [np.array(p) - [-1, 1] for p in pts]
+
     if plot:
         plot_grid(min_x - 1, max_x + 1, min_y - 1, max_y + 1)
         for pt in pts:
@@ -350,5 +354,6 @@ def get_betts_cluster(betts_key = '26A', shift = 0, plot = False):
     return pts
 
 if __name__ == "__main__":
-    c = Cluster(key='32A')
-    c.get_k_space(plot=True)
+    c = Cluster(key='24A')
+    c.get_k_space(plot=False)
+    print(c.coords)

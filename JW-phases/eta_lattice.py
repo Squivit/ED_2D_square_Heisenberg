@@ -271,7 +271,7 @@ class SpinConfiguration:
                 val |= 1 << (self.n - 1 - i)
             return val
 
-        for bosons_on_sites in tqdm(combinations(range(self.n), self.magnon_number), total=int(self.size)):
+        for bosons_on_sites in tqdm(combinations(range(self.n), self.magnon_number), total=int(self.size), disable = not self.print):
             state = bitmask(bosons_on_sites)
             norm, all_states = get_periodicities(state)
             if norm is not None:
@@ -348,7 +348,7 @@ if __name__ == "__main__":
     for ky in k_y:
         k_points.append( np.array( [1, ky] ) )
 
-    sc = SpinConfiguration(nx, ny, int(n/2), lowest_eignstates=5, delta=1., J2overJ1=1., lamb=1., eta=0., print_data=True)
+    sc = SpinConfiguration(nx, ny, int(n/2), lowest_eignstates=5, delta=1., J2overJ1=1., lamb=0., eta=1., print_data=False)
     min_e, gs_state = sc.get_ground_state()
     
     print(f'Ground state energy E_0/J = {round(min_e, 7)}')
@@ -356,6 +356,8 @@ if __name__ == "__main__":
     eign = sc.get_eigva_eigve(5)[0]
     print(np.round(eign, 6))
     
+
+
     """
     for k in k_points:
         print(f'k=({'𝛑/' + str(int(1/k[0])) if k[0] % 1 != 0 else '0' if k[0] == 0 else str(int(k[0])) + '𝛑'}, {'𝛑/' + str(int(1/k[1])) if k[1] % 1 != 0 else '0' if k[1] == 0 else str(int(k[1])) + '𝛑'})')

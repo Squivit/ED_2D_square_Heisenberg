@@ -69,9 +69,7 @@ class SpinConfiguration:
             raise ValueError('Magnon number should be smaller than the system size')
         
         self.size = int(binom(self.n, self.magnon_number))
-        #self.generate_spin_configurations()
         self.get_representations()
-
            
         start = time()
             

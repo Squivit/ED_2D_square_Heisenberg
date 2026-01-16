@@ -352,7 +352,7 @@ if __name__ == "__main__":
     deltas = [1.]
     lambdas = [1., 0.]
     
-    """
+    
     variables = [1., .8, .6, .4, .2, 0.]
     
     for iv, var in enumerate(variables):
@@ -360,9 +360,9 @@ if __name__ == "__main__":
         plot_SDSF(scm, 4, 4, lamb=1., delta=1., eta=var, dir='+-', save=True)
     
     plt.show()
-    """
-
     
+
+    """
     start_time = time()
 
     for id, delta in enumerate(deltas):
@@ -374,3 +374,4 @@ if __name__ == "__main__":
     print(f'Execution time: {round(time() - start_time, 3)}s')
 
     plt.show()
+    """

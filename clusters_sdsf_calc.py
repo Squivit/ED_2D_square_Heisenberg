@@ -1,4 +1,4 @@
-from clusters_lat_fast_sym import SpinConfiguration
+from clusters_lattice_fast import SpinConfiguration
 import numpy as np
 import matplotlib.pyplot as plt
 import time
@@ -11,12 +11,11 @@ from tqdm import tqdm
 
 class SpinCorrelatorMachine:
     
-    def __init__(self, cluster_key = '16B', mag = -1, _delta : float = 1., _lamb : float = 1., _J2overJ1 = 1., ks = [[0, 0], [0, .5]], print_data = False):
+    def __init__(self, cluster_key = '16B', mag = -1, _delta : float = 1., _lamb : float = 1., ks = [[0, 0], [0, .5]], print_data = False):
         
         self.delta = _delta
         self.lamb = _lamb
-        self.J2 = _J2overJ1
-        
+       
         self.key = cluster_key
         self.n = int(cluster_key[:2])
         
@@ -42,8 +41,8 @@ class SpinCorrelatorMachine:
         points_en = np.zeros( (get_n_lowest, len(self.k_points)) )
         
         if self.sc is None:
-            self.sc = SpinConfiguration(key=self.key, magnon_number=self.mag, delta = self.delta, J2overJ1=self.J2, lamb=self.lamb, 
-                                        lowest_eignstates=1, print_data=self.print_data)
+            self.sc = SpinConfiguration(key=self.key, magnon_number=self.mag, delta = self.delta, lamb=self.lamb, 
+                                        lowest_eignstates=20, print_data=self.print_data)
         else:
             self.sc.generate_hamiltonian(lamb=self.lamb, delta=self.delta)
             self.sc.get_eigva_eigve()
@@ -117,8 +116,8 @@ class SpinCorrelatorMachine:
         points_en = np.zeros( (get_n_lowest, len(self.k_points)) )
         
         if self.sc is None:
-            self.sc = SpinConfiguration(key=self.key, magnon_number=self.mag, delta = self.delta, lamb=self.lamb, J2overJ1=self.J2, 
-                                        lowest_eignstates=1, print_data=self.print_data)
+            self.sc = SpinConfiguration(key=self.key, magnon_number=self.mag, delta = self.delta, lamb=self.lamb, 
+                                        lowest_eignstates=20, print_data=self.print_data)
         else:
             self.sc.generate_hamiltonian(lamb=self.lamb, delta=self.delta)
             self.sc.get_eigva_eigve()
@@ -135,7 +134,7 @@ class SpinCorrelatorMachine:
                 if self.print_data:
                     print('Creating Sz=-1 helper...')
                 self.sc_minus_helper = SpinConfiguration(key=self.key, magnon_number=self.mag - 1, delta=self.delta, lamb=self.lamb, 
-                                                        J2overJ1=self.J2, lowest_eignstates=get_n_lowest, print_data=self.print_data)
+                                                        lowest_eignstates=get_n_lowest, print_data=self.print_data)
             else:
                 self.sc_minus_helper.generate_hamiltonian(k=k, lamb=self.lamb, delta=self.delta)
             
@@ -144,7 +143,13 @@ class SpinCorrelatorMachine:
             non_gs_states : np.ndarray = states
 
             dEnergy = energy - self.gs_en
-            
+
+            #print()
+            #print(energy)
+            #print(self.gs_en)
+            #print(k)
+            #print(dEnergy)
+
             if print_en_diff and self.print_data:
                 print(f'Highest energy difference: {round(dEnergy[-1], 5)}J')
                 print(f'Lowest energy difference: {round(dEnergy[0], 5)}J')
@@ -303,7 +308,7 @@ def save_process_data_to_txt(filename : str,label : str, exec_time : float):
 def get_lambda_var(key = '18A', filename = '', delta = 1., n_low = 25, also_zz = True):
     
     variables = [1., .75, .5, .25,  0.]
-    variables = [1., 0.]
+    #variables = [1.]
     
     scm = None
     for var in variables:
@@ -340,13 +345,10 @@ def get_delta_var(key = '18A', filename = '', lamb = 1., n_low = 25):
 
 if __name__ == "__main__":
     key = '24A'
-    n_low = 10
+    n_low = 25
     date_time = time.asctime(time.localtime()).replace(' ', '_').replace(':', '_')
     filename = rf"{key}__{date_time}.txt"
-    #get_lambda_var(key, filename, n_low=n_low)
-    get_lambda_var(key, filename, n_low=n_low, delta = 1., also_zz=False)
+    #get_lambda_var(key, filename, n_low=n_low, delta = 1., also_zz=False)
     get_lambda_var(key, filename, n_low=n_low, delta = 2., also_zz=False)
-    #get_lambda_var(key, filename, n_low=n_low, delta = 1.35, also_zz=False)
-    get_lambda_var(key, filename, n_low=n_low, delta = 1.74, also_zz=False)
     #get_delta_var(key, filename, n_low=n_low)
     #get_delta_var(key, filename, n_low=n_low, lamb=0.)

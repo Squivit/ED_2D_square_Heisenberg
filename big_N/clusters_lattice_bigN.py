@@ -13,8 +13,6 @@ import matplotlib.pyplot as plt
 
 from Betts_cluster import Cluster
 
-from tqdm import tqdm
-
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
 
@@ -22,15 +20,14 @@ from paths import *
 
 class SpinConfiguration:
     
-    def __init__(self, N = 16, number = 'A', key = None, magnon_number = -1, delta = 1., lamb= 1., J2overJ1 = 1.,
-                 lowest_eignstates = 1, print_data = False, force_ham_gen = False, tol : float = 1e-8):
+    def __init__(self, N = 16, number = 'A', key = None, magnon_number = -1, delta = 1., lamb= 1., k = np.array([0., 0.]),
+                 lowest_eignstates = 1, print_data = False, force_ham_gen = False):
         """
         k is in units of pi
         """
         
         self.print = print_data
         self.n_lowest = lowest_eignstates
-        self.tol = tol
 
         if key == None:
             self.n = N
@@ -50,7 +47,7 @@ class SpinConfiguration:
             self.magnon_number = magnon_number
 
         self.delta = delta
-        self.j2 = J2overJ1
+        self.k = k
         self.lamb = lamb
         
         # side lenghts optimized for 18A, 24A and 32A
@@ -102,7 +99,7 @@ class SpinConfiguration:
     def get_hamiltonian(self, k = None, lamb = None, delta = None, force_ham_gen = False):
         
         if k is None:
-            k = np.array( [0, 0] )
+            k = self.k
 
         if lamb is not None:
             self.lamb = lamb
@@ -149,14 +146,11 @@ class SpinConfiguration:
 
         start = time()
         
-
         self.hamiltonian_elements = []
         self.ham_i = []
         self.ham_j = []
 
-        e0 = 1. * self.n
-        e0 += self.j2 * self.n
-        e0 *= self.delta / 4.
+        e0 = 2. * self.n * self.delta / 4.
         self.e0 = e0
 
         spin_confg_items = list(self.representatives.items())
@@ -172,16 +166,13 @@ class SpinConfiguration:
             n_workers = mp.cpu_count()
 
         # Split work into chunks for parallel processing
-        n_chunks = 8
-        chunk_size = min(25000, len(self.representatives) // (n_workers * n_chunks) + 1)
-        chunk_size = 25000
-        #chunk_size = np.ceil(len(self.representatives) / (n_workers * n_chunks))
+        chunk_size = min(25000, len(self.representatives) // (n_workers) + 1)
         
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             # Submit chunks
             futures = []
             chunk = []
-            for repr, state in tqdm(spin_confg_items, total=len(self.representatives), disable=not self.print):
+            for repr, state in spin_confg_items:
                 chunk.append((repr, state))
                 
                 if len(chunk) >= chunk_size:
@@ -192,7 +183,7 @@ class SpinConfiguration:
                 futures.append(executor.submit(self._process_hamiltonian_batch, chunk.copy()))
                 chunk.clear()
 
-            for future in tqdm(as_completed(futures), total=len(futures), disable = not self.print):
+            for future in as_completed(futures):
                 batch_results = future.result()
                 self._merge_ham_results(batch_results)
 
@@ -222,7 +213,6 @@ class SpinConfiguration:
         # Directions for Heisenberg exchange
         directions = [(-1, 0), (0, -1)]  # x and y directions
         flips = [self.flips_change_side, self.flips_change_up]  # x and y directions
-        interactions = [1., self.j2] # interactions in x and y axis
         
         easy_ks = [0., 2.]
         k = self.k
@@ -251,23 +241,19 @@ class SpinConfiguration:
                     basis_index = map_int_to_basis(repr_b)
                     
                     if basis_index < state:
-                        phase = 0.
+                        phase = 1.
                         if not is_easy_k:
-                            for t in trans:
-                                phase += np.exp( -1j * np.pi * np.dot(k, t) )
-                            phase /= len(trans)
-                        else:
-                            phase = 1.
+                            phase = np.mean([np.exp( -1j * np.pi * np.dot(k, t) ) for t in trans])
                         
-                        element = 0.5 * interactions[id] * phase * np.sqrt(self.norms[repr]/self.norms[repr_b])
+                        element = 0.5 * phase * np.sqrt(self.norms[repr]/self.norms[repr_b])
                         
                         flipped_states_elements[basis_index] += element
                     
                 # Sz-Sz interaction energies
-                self_energy -= self.delta * 0.5 * interactions[id] * sum(mod(cluster_map*(config + roll_config), 2))
+                self_energy -= self.delta * 0.5 * sum(mod(cluster_map*(config + roll_config), 2))
 
                 if self.lamb != 1:
-                    self_energy -= interactions[id] * self.delta * (self.lamb - 1) * sum(cluster_map*(rot * roll(rot, dir, axis=(0, 1))))
+                    self_energy -= self.delta * (self.lamb - 1) * sum(cluster_map*(rot * roll(rot, dir, axis=(0, 1))))
             
             results.append({
                 'state': map_int_to_basis(repr),
@@ -288,9 +274,13 @@ class SpinConfiguration:
             self.ham_j.extend(flipped_states_elements.keys())
             self.hamiltonian_elements.extend(flipped_states_elements.values())
 
+            self.ham_i.extend(flipped_states_elements.keys())
+            self.ham_j.extend([state]*len(flipped_states_elements))
+            self.hamiltonian_elements.extend(np.conj(np.array(list(flipped_states_elements.values()))))
+
             self.ham_i.append(state)
             self.ham_j.append(state)
-            self.hamiltonian_elements.append(self_energy / 2.)
+            self.hamiltonian_elements.append(self_energy)
     
     def precompute_flips_change(self):
         """
@@ -323,15 +313,12 @@ class SpinConfiguration:
         if n_lowest >= self.size:
             raise ValueError(f"Requested {n_lowest} eigenstates, but matrix size is {self.size}")
 
-        energies, states = eigsh(self.hamiltonian, k=n_lowest, which='SA', tol=1e-6)
-
-        # Make correct hamiltonian (now it's only up-triangle with diagonal reduced by a factor of 2)
-        H = (self.hamiltonian + np.conj(self.hamiltonian.T))
+        self.hamiltonian = (self.hamiltonian + self.hamiltonian.T.conj())/2
         
-        energies, states = eigsh(H, k=n_lowest, which='SA', tol=self.tol)
+        energies, states = eigsh(self.hamiltonian, k=n_lowest, which='SA', ncv = max(2*n_lowest + 1, 60), tol=1e-10)
 
-        self.gs_energy = float(energies[0])
-        self.gs_in_basis = states[:, 0]
+        self.gs_energy = float(np.min(energies))
+        self.gs_in_basis = states[:, np.argmin(energies)]
 
         if n_lowest > 1:
             self.eign_en = energies
@@ -357,13 +344,9 @@ class SpinConfiguration:
         if n_workers is None:
             n_workers = mp.cpu_count()
         
-                
-        # Pre-compute bitmasks for all combinations
-        #all_states = list(self._generate_bitmasks())
-        
         # Split work into chunks for parallel processing
-        chunk_size = max(1, self.size // (n_workers * 4) + 1)
-        
+        chunk_size = min(self.size // n_workers + 1, 25000)
+
         # Initialize results storage
         self.representatives = []
         self.norms = {}
@@ -383,7 +366,7 @@ class SpinConfiguration:
             # Submit chunks
             futures = []
             chunk = []
-            for combo in tqdm(combinations(range(self.n), self.magnon_number), total=self.size, disable=not self.print):
+            for combo in combinations(range(self.n), self.magnon_number):
                 chunk.append(bitmask(combo))
                 
                 if len(chunk) >= chunk_size:
@@ -395,11 +378,12 @@ class SpinConfiguration:
                 chunk.clear()
             
             # Collect results
-            #for future in tqdm(as_completed(futures), total=len(futures), disable=not self.print):
             for future in as_completed(futures):
                 batch_results = future.result()
                 self._merge_results(batch_results)
         
+        self.representatives.sort()
+
         # Create final representative enumeration
         self.representatives = {r: i for i, r in enumerate(self.representatives)}
         
@@ -421,8 +405,8 @@ class SpinConfiguration:
             set_states = set()
             is_representative = True
             
-            for w, trans in self.weight_matrices:
-                rolled_state_int = int(np.dot(w, state_cfg))
+            for w, _ in self.weight_matrices:
+                rolled_state_int = int(w @ state_cfg)
                 
                 if rolled_state_int < state_int:
                     is_representative = False
@@ -538,7 +522,8 @@ if __name__ == "__main__":
     N = 24
     num = 'A'
     
-    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2), lowest_eignstates=1, delta=1., lamb=1., print_data=True, force_ham_gen=False)
+    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2), lowest_eignstates=10,
+                           delta=1., lamb=1., k=np.array([0., 0.]), print_data=True, force_ham_gen=False)
     min_e, gs_state = sc.get_ground_state()
         
     print(f'Ground state energy E_0/J = {round(min_e, 5)}')
