@@ -456,7 +456,7 @@ if __name__ == "__main__":
     N = 24
     num = 'A'
     
-    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, lowest_eignstates=1, delta=1., lamb=1., print_data=True)
+    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2), lowest_eignstates=10, delta=1., lamb=1., print_data=True)
     min_e, gs_state = sc.get_ground_state()
         
     print(f'Ground state energy E_0/J = {round(min_e, 5)}')

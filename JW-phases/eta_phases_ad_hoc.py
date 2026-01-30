@@ -42,7 +42,7 @@ class Representation():
 
         self.coords_per_id = [ (int(n_y/2)-1, int(n_x/2)-1), (int(n_y/2)-1, int(n_x/2)),
                           (int(n_y/2), int(n_x/2)-1), (int(n_y/2), int(n_x/2)) ]
-
+        
         def _generate_bitmasks():
             """Generate bitmasks efficiently."""
             for combo in combinations(range(self.n), self.magnon_number):
@@ -94,7 +94,7 @@ class Representation():
         self.size = len(all_states)
         
         # Split work into chunks for parallel processing
-        chunk_size = max(1, len(all_states) // (n_workers * 4))
+        chunk_size = min(250000, self.size // (n_workers) + 1)
         
         # Initialize results storage
         self.representatives = []
@@ -102,12 +102,12 @@ class Representation():
         self.get_representative = {}
         
         # Process in parallel
-        print(f"Processing {len(all_states)} states with {n_workers} workers...")
+        print(f"Processing {self.size} states with {n_workers} workers...")
         
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             # Submit chunks
             futures = []
-            for i in range(0, len(all_states), chunk_size):
+            for i in range(0, self.size, chunk_size):
                 chunk = all_states[i:i + chunk_size]
                 futures.append(executor.submit(self._process_state_batch, chunk))
             
@@ -251,7 +251,7 @@ class Representation():
 
         directions = [(0, -1), (-1, 0)]  # x and y directions
         flips = [self.flips_change_side, self.flips_change_up]  # x and y directions
-        # I see that it gives the correct result for 4x4, but I don't know why we need this phase
+        # Calculations overcount one theta_ij phase, so it needs to be removed later
         thetas = [0, np.pi/2]  # x and y directions
         #thetas = [0, 0]  # x and y directions
 
@@ -286,7 +286,7 @@ class Representation():
                         # sign to check whether it was S+S- or S-S+, as it:
                         # 1) conjugetes the exponent (-1. sign in the phase)
                         # 2) changes whether we calculate phase on the flipped or original state (see pdf with Hamiltonian)
-                        sign = 1. if config[y, x] == 0 else -1
+                        sign = 1. if config[y, x] == 0 else -1.
 
                         if sign == 1:
                             flipped_cfg = map_int_to_config(config_int + int_shift)
@@ -312,7 +312,7 @@ class Representation():
                         
                         # calculates theta_ri + theta_rj = theta_ir + theta_jr + 2pi, which we remove with taking mod 2pi everything
                         # again, sign for conjugate
-                        eta_phases.append( sign * np.mod( thetas[id] + extended_phase(rot_xy, index) + extended_phase(roll_rot_xy, index), 2 * np.pi))
+                        eta_phases.append( sign * np.mod( -thetas[id] + extended_phase(rot_xy, index) + extended_phase(roll_rot_xy, index), 2 * np.pi))
 
         print(len(eta_phases))
         np.savetxt(fr'JW-phases/eta_phases_{n_x}x{n_y}_Sz={int(n_x*n_y/2-self.magnon_number)}.txt', eta_phases)
@@ -320,7 +320,7 @@ class Representation():
 
 if __name__ == '__main__':
     nx = 4
-    ny = 4
+    ny = 6
 
     k_max = 0
     mag = int((nx * ny)/2)

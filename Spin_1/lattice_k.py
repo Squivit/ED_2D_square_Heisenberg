@@ -10,9 +10,6 @@ from numpy import array as cparray
 
 from tqdm import tqdm
 
-from concurrent.futures import ProcessPoolExecutor, as_completed
-import multiprocessing as mp
-
 class SpinConfiguration:
     
     def __init__(self, N_x = 4, N_y = 4, magnon_number = 8, delta = 1., lamb= 1., J2overJ1 = 1.,
@@ -48,6 +45,7 @@ class SpinConfiguration:
             raise ValueError('Magnon number should be smaller than the system size')
         
         self.size = int(binom(self.n, self.magnon_number))
+        #self.generate_spin_configurations()
         self.get_representations()
 
         start = time()
@@ -158,11 +156,9 @@ class SpinConfiguration:
         repr_size = len(self.representatives)
 
         if easy_ks.__contains__(k[0]) and easy_ks.__contains__(k[1]):
-            d_type = np.float32
+            self.hamiltonian = csr_matrix((cparray(hamiltonian_elements, dtype=np.float32), (cparray(ham_i, dtype=int), cparray(ham_j, dtype=int))), shape=(repr_size, repr_size))
         else:
-            d_type = np.complex64
-
-        self.hamiltonian = csr_matrix((np.array(hamiltonian_elements, dtype=d_type), (np.array(ham_i, dtype=int), np.array(ham_j, dtype=int))), shape=(repr_size, repr_size))
+            self.hamiltonian = csr_matrix((cparray(hamiltonian_elements, dtype=np.complex64), (cparray(ham_i, dtype=int), cparray(ham_j, dtype=int))), shape=(repr_size, repr_size))
 
 
     def precompute_flips_change(self):
@@ -210,15 +206,10 @@ class SpinConfiguration:
             return energies, states
 
 
-    def get_representations(self, n_workers=None):
+    def get_representations(self):
         """
-        Generates representations of spin states with parallel execution.
-        
-        Args:
-            n_workers: Number of parallel workers. None = use all CPU cores.
+        Generates representations of the spin states reduced by the translational, spin inversion and mirror symmetries.
         """
-        if n_workers is None:
-            n_workers = mp.cpu_count()
                 
         xs = np.arange(self.n_x)
         ys = np.arange(self.n_y)
@@ -227,110 +218,72 @@ class SpinConfiguration:
         
         for trans in all_translations:
             for t in trans:
-                if self.magnon_number != int(self.n / 2):
-                    # allow only even translations, as rotation map is invariant to ONLY EVEN T
-                    if np.sum(t) % 2 == 0:
-                        translations.append(t)
-                else:
-                    # for S^z_tot = 0 also T_odd * I, where I -- spin inversion, allowed
+                # allow only even translations, as rotation map is invariant to ONLY EVEN T
+                if np.sum(t) % 2 == 0:
                     translations.append(t)
                 
-        # Pre-compute weight matrices and store as instance variable
-        # last value is whether the translation needs spin inversion
-        self.weight_matrices = [
-            ((np.roll(self.weight_matrix, np.array(t), axis=(0, 1))).ravel(), t, np.sum(t)%2)
-            for t in translations
-        ]
+        weight_matrices = []
         
-        # Pre-compute bitmasks for all combinations
-        all_states = list(self._generate_bitmasks())
+        for t in translations:            
+            weight_matrices.append(( np.roll(self.weight_matrix, np.array(t), axis=(0, 1)).ravel(), t))
         
-        # Split work into chunks for parallel processing
-        chunk_size = max(1, len(all_states) // (n_workers * 4))
-        
-        # Initialize results storage
-        self.representatives = []
-        self.norms = {}
-        self.get_representative = {}
-        
-        # Process in parallel
-        if self.print:
-            print(f"Processing {len(all_states)} states with {n_workers} workers...")
-        
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            # Submit chunks
-            futures = []
-            for i in range(0, len(all_states), chunk_size):
-                chunk = all_states[i:i + chunk_size]
-                futures.append(executor.submit(self._process_state_batch, chunk))
-            
-            # Collect results with progress bar
-            for future in tqdm(as_completed(futures), total=len(futures), disable=not self.print):
-                batch_results = future.result()
-                self._merge_results(batch_results)
-        
-        # Create final representative enumeration
-        self.representatives = {r: i for i, r in enumerate(self.representatives)}
-        
-        if self.print:
-            print(f'Total representatives found: {len(self.representatives)}')
-            print(f'Matrix reduction: {round(self.size/len(self.representatives), 1)}:1')
+        int_to_cfg = self.map_int_to_config
+                
+        def get_periodicities(state_int):
+            state_cfg = int_to_cfg(state_int).ravel()
+            set_states = set()
+            all_states = []
 
-    def _generate_bitmasks(self):
-        """Generate bitmasks efficiently."""
-        for combo in combinations(range(self.n), self.magnon_number):
+            for w, trans in weight_matrices:
+                rolled_state_int = np.dot(w, state_cfg)
+                
+                if rolled_state_int < state_int:
+                    # there is already a smaller representative -> translational state, whose int is smaller
+                    return None, None
+                else:
+                    set_states.add(rolled_state_int)
+                    all_states.append((rolled_state_int, trans))
+
+            return len(set_states), all_states
+        
+        # list of state_int
+        self.representatives = []
+        # keys: repr_state_int, values: normalization factor of the representative
+        self.norms = {}
+        # keys: state_int, values: (its representative int , translation needed to get to it)
+        self.get_representative = {}
+                
+        def bitmask(combo):
             val = 0
             for i in combo:
                 val |= 1 << (self.n - 1 - i)
-            yield val
-    
-    def _process_state_batch(self, states):
-        """Process a batch of states."""
-        results = []
-        h_size = 2**self.n - 1
+            return val
+
+        for bosons_on_sites in tqdm(combinations(range(self.n), self.magnon_number), total=int(self.size), disable=not self.print):
+            state = bitmask(bosons_on_sites)
+            norm, all_states = get_periodicities(state)
+            if norm is not None:
+                self.representatives.append(state)
+                self.norms[state] = norm
+                for _state, trans in all_states:
+                    if self.get_representative.keys().__contains__(_state):
+                        self.get_representative[_state][1].append(trans)
+                    else:
+                        self.get_representative[_state] = [state, [trans]]
         
-        for state_int in states:
-            # Convert to config using the proper mapping
-            state_cfg = self.map_int_to_config(state_int).ravel()
-            
-            set_states = set()
-            all_states = []
-            is_representative = True
-            
-            for w, trans, inv in self.weight_matrices:
-                rolled_state_int = int(h_size * inv + (1 - 2 * inv) * np.dot(w, state_cfg))
-                
-                if rolled_state_int < state_int:
-                    is_representative = False
-                    break
-                
-                set_states.add(rolled_state_int)
-                all_states.append((rolled_state_int, trans))
-            
-            if is_representative:
-                results.append({
-                    'state': state_int,
-                    'norm': len(set_states),
-                    'all_states': all_states
-                })
+        self.representatives.sort()
+        # this order reduces the number of off-diagonal elements by a bit
+        self.representatives.reverse()
         
-        return results
-    
-    def _merge_results(self, batch_results):
-        """Merge results from a batch into main storage."""
-        for result in batch_results:
-            state = result['state']
-            norm = result['norm']
-            all_states = result['all_states']
-            
-            self.representatives.append(state)
-            self.norms[state] = norm
-            
-            for _state, trans in all_states:
-                if _state in self.get_representative:
-                    self.get_representative[_state][1].append(trans)
-                else:
-                    self.get_representative[_state] = [state, [trans]]
+        # dictionary of:
+        # keys: int value of the representative
+        # values: enumeration of the new basis of representatives  
+        self.representatives = { r: i for i, r in enumerate(self.representatives) }
+                
+        if self.print:
+            print(f'Total number of found representatives: {len(self.representatives.keys())}')
+            print(f'Percent of repr in total states: {round(100*len(self.representatives.keys())/self.size, 2)}%')
+            print(f'Estimated matrix reduction: {round(self.size/len(self.representatives.keys()), 1)}:1')
 
 
     def get_ground_state(self):
@@ -349,40 +302,20 @@ class SpinConfiguration:
         idx = self.map_config_to_int(config)
         return self.representatives[idx]
 
-    def draw_configuration_int(self, n):
-        a = self.map_int_to_config(n)#.reshape((self.n_y, self.n_x))
-        print(a)
-
 
 
 if __name__ == "__main__":
-    nx = 6
-    ny = 4
+    nx = 4
+    ny = 2
     n = nx*ny
     
-    sc = SpinConfiguration(nx, ny, int(n/2), lowest_eignstates=1, delta=1., lamb=0., print_data=False)
+    sc = SpinConfiguration(nx, ny, int(n/2), lowest_eignstates=1, delta=1., lamb=1., print_data=True)
     min_e, gs_state = sc.get_ground_state()
-    
+
     print(f'Ground state energy E_0/J = {round(min_e, 7)}')
     print(f'GS energy per-site: e_0/J = {round(min_e/n, 7)}')
     eign = sc.get_eigva_eigve(5)[0]
     print(np.round(eign, 6))
-
-    neel_state = np.array( [ [ (1 + (-1)**(x + y))/2 for x in range(nx) ] for y in range(ny) ] ).reshape((ny, nx))
-    neel_basis = sc.map_config_to_basis(neel_state)
-    print(f'Neel state contribution to the ground state: {np.square(gs_state[neel_basis])}')
-    print(f'Maximum contribution of single representative to the ground state: {np.square(np.max(np.abs(gs_state)))}')
-    contr = np.square(np.abs(gs_state))
-    contr.sort()
-    print(contr[-5:])
-    indices = np.where(np.square(np.abs(gs_state)) > contr[-3])[0]
-    #indices = np.where(np.square(np.abs(gs_state)) > 0.037)[0]
-
-    for ind in indices:
-        print(np.where(list(sc.representatives.values()) == ind)[0][0])
-        cfg_int = list(sc.representatives.keys())[np.where(list(sc.representatives.values()) == ind)[0][0]]
-        print(cfg_int)
-        print(sc.map_int_to_config(cfg_int))
 
     """
     m_s = 0
@@ -391,9 +324,17 @@ if __name__ == "__main__":
     
     for repr, ii in sc.representatives.items():
         config = sc.map_int_to_config(repr)
-        rot = config * rotation_map + (1 - config) * (1 - rotation_map)
+        #rot = (config * rotation_map + (1 - config) * (1 - rotation_map))
+        spin_config = config - .5
+        rot = (-1)**rotation_map * spin_config
 
-        m_s += np.square(np.abs(gs_state[ii])) * (np.mean(rot))
+        s = 0
+
+        for x in range(nx):
+            for y in range(ny):
+                s += (-1)**(x+y+1) * rot * spin_config[y, x]
+
+        m_s += np.square(np.abs(gs_state[ii])) * (np.sum(s)) / (n**2)
 
     print(m_s)
     """

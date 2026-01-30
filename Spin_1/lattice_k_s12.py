@@ -155,10 +155,10 @@ class SpinConfiguration:
                     # by 2 cuz double bonds
                     self_energy -= self.delta * (self.lamb - 1) * np.sum(rot * np.roll(rot, dir, axis=(0, 1))) / 2
 
-            #for basis_state, element in flipped_states_elements.items():
-            #    ham_i.append(state)
-            #    ham_j.append(basis_state)
-            #    hamiltonian_elements.append(element)
+            for basis_state, element in flipped_states_elements.items():
+                ham_i.append(state)
+                ham_j.append(basis_state)
+                hamiltonian_elements.append(element)
             
             ham_i.append(state)
             ham_j.append(state)

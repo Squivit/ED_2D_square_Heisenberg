@@ -1,4 +1,4 @@
-from lattice_k_sym import SpinConfiguration
+from lattice_k import SpinConfiguration
 import numpy as np
 import matplotlib.pyplot as plt
 import os
@@ -221,7 +221,9 @@ def plot_SDSF(scm = None, nx = 4, ny = 4, lamb = 1, delta = 1, dir = '+-',
     if nx == ny:
         for ky in (k_y[:-1]).__reversed__():
             k_points.append( np.array( [ky, ky] ) )
-    print(k_points)
+    
+    #print(k_points)
+    print(f'Starting SDSF calculation for ({nx}, {ny}) supercell with Delta = {delta}, lambda = {lamb}.')
         
     if scm is None:
         scm = SpinCorrelatorMachine((nx, ny), ks=k_points, _lamb = lamb, _delta = delta)
@@ -237,7 +239,7 @@ def plot_SDSF(scm = None, nx = 4, ny = 4, lamb = 1, delta = 1, dir = '+-',
     p_s = find_degeneracy(p_mag=p_s, p_en=p_x, limit = 3)
 
     p_s = np.round(p_s, 9)
-    print('Rounding result to the 1e-9 to reduce numerical inaccuracies')
+    #print('Rounding result to the 1e-9 to reduce numerical inaccuracies')
     
     if save:
         try:
@@ -324,7 +326,7 @@ if __name__ == "__main__":
     
     scm = None
         
-    deltas = [1.35, 1.74]
+    deltas = [1., 2.]
     lambdas = [1., 0.]
 
     s_time = time()
@@ -333,7 +335,7 @@ if __name__ == "__main__":
         for il, lamb in enumerate(lambdas):
             if delta != 0. or lamb != 0.:
                 plt.subplot(len(deltas), len(lambdas), il + 1 + len(lambdas) * id)
-                plot_SDSF(scm, 6, 4, lamb=lamb, delta=delta, dir='+-', marker_s=marker_size, graph_normalized=graph_normalized,
+                plot_SDSF(scm, 4, 6, lamb=lamb, delta=delta, dir='+-', marker_s=marker_size, graph_normalized=graph_normalized,
                           to_diameter=to_diameter, save=True, k_lowest=10)
     #plot_SDSF(scm, 4, 4, lamb=1., delta=1., dir='zz', marker_s=marker_size, graph_normalized=graph_normalized, to_diameter=to_diameter, save=False)
 

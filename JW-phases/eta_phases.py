@@ -245,8 +245,8 @@ class Representation():
 
 
 if __name__ == '__main__':
-    nx = 6
-    ny = 4
+    nx = 4
+    ny = 6
 
     k_max = 0
     mag = int((nx * ny)/2)

@@ -1,12 +1,5 @@
 import numpy as np
 from itertools import combinations
-from time import time
-import os
-
-from scipy.special import binom
-
-from scipy.sparse.linalg import eigsh
-from scipy.sparse import csr_matrix, save_npz, load_npz
 
 from Betts_cluster import Cluster
 
@@ -41,8 +34,11 @@ class Parameter_Changer():
 
         self.precompute_flips_change()
 
+        #self.size = int(binom(self.n, self.magnon_number))
+        #self.get_representations()
+
         self.representatives = np.loadtxt(fr'{REPR_PATH}/{key}_Sz={abs(int(self.n/2) - self.magnon_number)}.txt')
-        self.representatives = {r: i for i, r in enumerate(self.representatives)}
+        self.representatives = {int(r): i for i, r in enumerate(self.representatives)}
 
 
     def change_parameters(self, ham_csr, d = 1., l = 1., d_i = 1., l_i = 1., _print = False):
@@ -62,7 +58,7 @@ class Parameter_Changer():
         spin_confg_items = list(self.representatives.items())
 
         # Split work into chunks for parallel processing
-        chunk_size = 25000
+        chunk_size = len(self.representatives) // (n_workers) + 1
         
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             # Submit chunks
@@ -143,6 +139,104 @@ class Parameter_Changer():
             self_energy = result['energy']
             
             self.ham_csr[state, state] += self_energy /2.
+
+
+    def get_representations(self, n_workers=None):
+        """
+        Generates representations of spin states with parallel execution.
+        
+        Args:
+            n_workers: Number of parallel workers. None = use all CPU cores.
+        """
+
+        # checks if successfully loaded representatives
+        #if self.load_representatives():
+        #    return
+
+        if n_workers is None:
+            n_workers = mp.cpu_count()
+        
+        # Split work into chunks for parallel processing
+        chunk_size = min(self.size // n_workers + 1, 500000)
+
+        # Initialize results storage
+        self.representatives = []
+        self.norms = {}
+        
+        print(f"Processing {self.size} states with {n_workers} workers...")
+        
+        def bitmask(combo):
+            """Generate bitmasks efficiently."""
+            val = 0
+            for i in combo:
+                val |= 1 << (self.n - 1 - i)
+            return val
+
+        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+            # Submit chunks
+            futures = []
+            chunk = []
+            for combo in tqdm(combinations(range(self.n), self.magnon_number), total = self.size, mininterval=5.):
+                chunk.append(bitmask(combo))
+                
+                if len(chunk) >= chunk_size:
+                    futures.append(executor.submit(self._process_state_batch, chunk.copy()))
+                    chunk.clear()
+            
+            if len(chunk) > 0:
+                futures.append(executor.submit(self._process_state_batch, chunk.copy()))
+                chunk.clear()
+            
+            # Collect results
+            for future in as_completed(futures):
+                batch_results = future.result()
+                self._merge_results(batch_results)
+        
+        self.representatives.sort()
+
+        # Create final representative enumeration
+        self.representatives = {r: i for i, r in enumerate(self.representatives)}
+        
+        print(f'Total representatives found: {len(self.representatives)}')
+
+    
+    def _process_state_batch(self, states):
+        """Process a batch of states."""
+        results = []
+        
+        for state_int in states:
+            # Convert to config using the proper mapping
+            state_cfg = self.map_int_to_config(state_int).ravel()
+            
+            set_states = set()
+            is_representative = True
+            
+            for w, _ in self.weight_matrices:
+                rolled_state_int = int(w @ state_cfg)
+                
+                if rolled_state_int < state_int:
+                    is_representative = False
+                    break
+                
+                set_states.add(rolled_state_int)
+            
+            if is_representative:
+                results.append({
+                    'state': state_int,
+                    'norm': len(set_states),
+                })
+            
+        return results
+    
+    def _merge_results(self, batch_results):
+        """Merge results from a batch into main storage."""
+        for result in batch_results:
+            state = result['state']
+            norm = result['norm']
+            
+            self.representatives.append(state)
+            self.norms[state] = norm
+
 
     def precompute_flips_change(self):
         """

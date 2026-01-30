@@ -48,7 +48,6 @@ class SpinConfiguration:
         side = 18
         if self.n > 24:
             side = 32
-            print('WARNING! For more than 24 spin bigmap of size 26 might be too small!')
         
         self.cluster = Cluster(N=self.n, num=number, key=key, bigmap_shift=0, bigmap_side=side)
         
@@ -382,23 +381,22 @@ if __name__ == "__main__":
     num = 'A'
     
     sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2), k=np.array([0., 0.]),
-                            lowest_eignstates=10, delta=1., lamb=1., print_data=True)
+                            lowest_eignstates=10, delta=1., lamb=1., print_data=False)
     min_e, gs_state = sc.get_ground_state()
 
     print(f'Ground state energy E_0/J = {round(min_e, 5)}')
     print(f'GS energy per-site: e_0/J = {round(min_e/(N), 5)}')
 
-    raise ValueError
-
-    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)-1, k=np.array([2/3, 2/3]),
-                            lowest_eignstates=10, delta=1., lamb=0., print_data=True)
+    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)-1, k=np.array([0., 0.]),
+                            lowest_eignstates=10, delta=1., lamb=1., print_data=False)
     min_e_1, gs_state = sc.get_ground_state()
 
     print(f'Ground state energy E_0/J = {round(min_e_1, 5)}')
     print(f'GS energy per-site: e_0/J = {round(min_e_1/(N), 5)}')
 
     print(f'Gap: {round(min_e_1 - min_e, 5)}')
-    
+
+    """
     eign = sc.get_eigva_eigve(5)[0]
     print(np.round(eign, 6))
 
@@ -427,3 +425,4 @@ if __name__ == "__main__":
 
     for ii in range(5):
         get_gap_for_lamb(0., samples = 5, eigvals=10)
+    """

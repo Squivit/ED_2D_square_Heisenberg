@@ -1,5 +1,7 @@
 import numpy as np
-from itertools import combinations
+from itertools import combinations_with_replacement
+from collections import Counter
+
 from scipy.special import binom
 from time import time
 import matplotlib.pyplot as plt
@@ -14,8 +16,8 @@ import multiprocessing as mp
 
 class SpinConfiguration:
     
-    def __init__(self, N_x = 2, N_y = 2, magnon_number = 4, delta = 1., lamb= 1., S = 1,
-                 lowest_eignstates = 1, print_data = False, tol : float = 1e-8):
+    def __init__(self, N_x = 2, N_y = 2, magnon_number = 4, delta = 1., lamb= 1., S = 3/2,
+                 lowest_eignstates = 1, print_data = False, tol : float = 1e-10):
         """
         k is in units of pi
         """
@@ -34,7 +36,7 @@ class SpinConfiguration:
         
         self.tol = tol
         
-        self.weight_matrix = np.array([ 3**(ii-1) for ii in range(self.n, 0, -1)]).reshape((self.n_y, self.n_x))
+        self.weight_matrix = np.array([ 4**(ii-1) for ii in range(self.n, 0, -1)]).reshape((self.n_y, self.n_x))
         
         self.precompute_flips_change()
         
@@ -109,16 +111,17 @@ class SpinConfiguration:
             flipped_states_elements.clear()
             
             if self.lamb != 1:
-                rot = (config * rotation_map + (2*S - config) * (1 - rotation_map))
+                rot = (config * rotation_map + (3 - config) * (1 - rotation_map))
 
-            self_energy += U * np.sum(config * (config - 1))
+            # corresponds to (S^z_i - 1/2) * (S^z_i + 1/2)
+            self_energy += U * np.sum((config - 1) * (config - 2))
 
             for id, dir in enumerate(directions):
                 roll_config = np.roll(config, dir, axis=(0, 1))
                 # only S+S-
                 possible_mixing_pm = np.ones_like(config)
                 # cannot flip if i is full
-                possible_mixing_pm[config >= 2] = 0
+                possible_mixing_pm[config >= 3] = 0
                 # cannot flip if j is empty
                 possible_mixing_pm[roll_config == 0] = 0
 
@@ -127,7 +130,7 @@ class SpinConfiguration:
                 # cannot flip if i is empty
                 possible_mixing_mp[config == 0] = 0
                 # cannot flip if j is full
-                possible_mixing_mp[roll_config >= 2] = 0
+                possible_mixing_mp[roll_config >= 3] = 0
 
                 config_int_shift_pm = np.array(possible_mixing_pm * flips[id], dtype=float)
                 config_int_shift_mp = np.array(possible_mixing_mp * flips[id], dtype=float)
@@ -191,9 +194,9 @@ class SpinConfiguration:
         repr_size = len(self.representatives)
 
         if easy_ks.__contains__(k[0]) and easy_ks.__contains__(k[1]):
-            self.hamiltonian = csr_matrix((cparray(hamiltonian_elements, dtype=np.float32), (cparray(ham_i, dtype=int), cparray(ham_j, dtype=int))), shape=(repr_size, repr_size))
+            self.hamiltonian = csr_matrix((cparray(hamiltonian_elements, dtype=np.float64), (cparray(ham_i, dtype=int), cparray(ham_j, dtype=int))), shape=(repr_size, repr_size))
         else:
-            self.hamiltonian = csr_matrix((cparray(hamiltonian_elements, dtype=np.complex64), (cparray(ham_i, dtype=int), cparray(ham_j, dtype=int))), shape=(repr_size, repr_size))
+            self.hamiltonian = csr_matrix((cparray(hamiltonian_elements, dtype=np.complex128), (cparray(ham_i, dtype=int), cparray(ham_j, dtype=int))), shape=(repr_size, repr_size))
 
 
     def precompute_flips_change(self):
@@ -224,9 +227,6 @@ class SpinConfiguration:
         else:
             n_lowest = n_states
 
-        if n_lowest >= self.size:
-            raise ValueError(f"Requested {n_lowest} eigenstates, but matrix size is {self.size}")
-
         # Make correct hamiltonian (now it's only up-triangle with diagonal reduced by a factor of 2)
         H = (self.hamiltonian + np.conj(self.hamiltonian.T))
         
@@ -251,8 +251,6 @@ class SpinConfiguration:
         if n_workers is None:
             n_workers = mp.cpu_count()
 
-        self.size = np.sum( [ int(binom(self.n, k) * binom(self.n - k, self.magnon_number - 2 * k)) for k in range(int(self.magnon_number/2) + 1)] )
-
         xs = np.arange(self.n_x)
         ys = np.arange(self.n_y)
         all_translations = [[ [-int(y), -int(x)] for x in xs] for y in ys]
@@ -273,32 +271,50 @@ class SpinConfiguration:
         # keys: state_int, values: (its representative int , translation needed to get to it)
         self.get_representative = {}
         
-        from itertools import chain
-        sites_available = chain(range(self.n), range(self.n))
+        sites_available = range(self.n)
+        #sites_available = range(self.n-1, -1, -1)
+        all_states = []
 
-        # Pre-compute bitmasks for all combinations
-        all_states = list(self._generate_bitmasks(sites_available))
-
-        # Process in parallel
-        if self.print:
-            print(f"Processing {len(all_states)} states with {n_workers} workers...")
-
-        # Split work into chunks for parallel processing
-        chunk_size = min(25000, len(all_states) // n_workers)
-
-
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            # Submit chunks
-            futures = []
-            for i in range(0, len(all_states), chunk_size):
-                chunk = all_states[i:i + chunk_size]
-                futures.append(executor.submit(self._process_state_batch, chunk))
+        for combo in tqdm(combinations_with_replacement(sites_available, self.magnon_number), disable = not self.print):
+            if any(count > 3 for count in Counter(combo).values()):
+                continue
+        
+            cfg_int = 0
+            for i in combo:
+                cfg_int += 4**(self.n - 1 - i)
             
-            # Collect results with progress bar
-            for future in tqdm(as_completed(futures), total=len(futures), disable=not self.print):
-                batch_results = future.result()
-                self._merge_results(batch_results)
+            all_states.append(cfg_int)
 
+        int_to_cfg = self.map_int_to_config
+
+        def get_periodicities(state_int):
+            state_cfg = int_to_cfg(state_int).ravel()
+            set_states = set()
+            all_states = []
+
+            for w, trans in self.weight_matrices:
+                rolled_state_int = np.dot(w, state_cfg)
+                
+                if rolled_state_int < state_int:
+                    # there is already a smaller representative -> translational state, whose int is smaller
+                    return None, None
+                else:
+                    set_states.add(rolled_state_int)
+                    all_states.append((rolled_state_int, trans))
+
+            return len(set_states), all_states
+
+        for state in tqdm(all_states, disable=not self.print):
+            norm, all_states = get_periodicities(state)
+            if norm is not None:
+                self.representatives.append(state)
+                self.norms[state] = norm
+                for _state, trans in all_states:
+                    if self.get_representative.keys().__contains__(_state):
+                        self.get_representative[_state][1].append(trans)
+                    else:
+                        self.get_representative[_state] = [state, [trans]]
+        
         self.representatives.sort()
         # this order reduces the number of off-diagonal elements by a bit
         self.representatives.reverse()
@@ -310,67 +326,7 @@ class SpinConfiguration:
                 
         if self.print:
             print(f'Total number of found representatives: {len(self.representatives.keys())}')
-            print(f'Percent of repr in total states: {round(100*len(self.representatives.keys())/self.size, 2)}%')
-            print(f'Estimated matrix reduction: {round(self.size/len(self.representatives.keys()), 1)}:1')
-
-    def _generate_bitmasks(self, sites_available):
-        """Generate bitmasks efficiently."""
-        for combo in combinations(sites_available, self.magnon_number):
-            val = 0
-            for i in combo:
-                val += 3**(self.n - 1 - i)
-            yield val
     
-    def _process_state_batch(self, states):
-        """Process a batch of states."""
-        results = []
-        
-        for state_int in states:
-            # Convert to config using the proper mapping
-            state_cfg = self.map_int_to_config(state_int).ravel()
-            
-            set_states = set()
-            all_states = []
-            is_representative = True
-            
-            for w, trans in self.weight_matrices:
-                rolled_state_int = int(np.dot(w, state_cfg))
-                
-                if rolled_state_int < state_int:
-                    is_representative = False
-                    break
-                
-                set_states.add(rolled_state_int)
-                all_states.append((rolled_state_int, trans))
-            
-            if is_representative:
-                results.append({
-                    'state': state_int,
-                    'norm': len(set_states),
-                    'all_states': all_states
-                })
-        
-        return results
-    
-    def _merge_results(self, batch_results):
-        """Merge results from a batch into main storage."""
-        for result in batch_results:
-            state = result['state']
-            norm = result['norm']
-            all_states = result['all_states']
-
-            if self.representatives.__contains__(state):
-                continue
-
-            self.representatives.append(state)
-            self.norms[state] = norm
-            
-            for _state, trans in all_states:
-                if _state in self.get_representative:
-                    self.get_representative[_state][1].append(trans)
-                else:
-                    self.get_representative[_state] = [state, [trans]]
-
     def get_ground_state(self):
         return self.gs_energy, self.gs_in_basis
     
@@ -378,8 +334,8 @@ class SpinConfiguration:
         state = np.zeros(self.n)
         for ii in range(self.n):
             a = self.n - ii - 1
-            state[ii] = n // 3**a
-            n %= 3**a
+            state[ii] = n // 4**a
+            n %= 4**a
         return state.reshape((self.n_y, self.n_x))
     
     def map_int_to_basis(self, n):
@@ -398,7 +354,7 @@ class SpinConfiguration:
 
 def get_gs(nx = 4, ny = 2, U = 0):
 
-    max_bosons = nx * ny + 1
+    max_bosons = int( 3/2 * nx * ny + 1 )
     mine = 999
     gs = None
     bosons_n = 0
@@ -420,46 +376,31 @@ def get_gs(nx = 4, ny = 2, U = 0):
 
 
 if __name__ == "__main__":
-    nx = 6
+    nx = 4
     ny = 2
     n = nx*ny
     delta = 1.
     lamb = 1.
-    S = 1
-    U = 0
+    S = 3/2
+    U = 5e4
     
-    sc = SpinConfiguration(nx, ny, int(n), lowest_eignstates=1, delta=delta, lamb=lamb, print_data=True, S = S)
-    # U that should be used is up to 1e5
-    sc.generate_hamiltonian(U = U)
-    sc.get_eigva_eigve()
-    min_e, gs_state = sc.get_ground_state()
-    print(min_e)
-    raise TimeoutError
-
-    sc = SpinConfiguration(nx, ny, int(n) + 1, lowest_eignstates=1, delta=delta, lamb=lamb, print_data=False, S = S)
-    # U that should be used is up to 1e5
-    sc.generate_hamiltonian(U = U)
-    sc.get_eigva_eigve()
-    min_e1, gs_state = sc.get_ground_state()
-
-    print(f'Energy gap E/2S: {np.round((min_e1 - min_e)/(2*S), 3)}')
-
-    S = 1/2
-    U = 1e5
-
-    sc = SpinConfiguration(nx, ny, int(n/2), lowest_eignstates=1, delta=delta, lamb=lamb, print_data=False, S = S)
+    sc = SpinConfiguration(nx, ny, int(3*n/2), lowest_eignstates=1, delta=delta, lamb=lamb, print_data=True, S = S)
     # U that should be used is up to 1e5
     sc.generate_hamiltonian(U = U)
     sc.get_eigva_eigve()
     min_e, gs_state = sc.get_ground_state()
 
-    sc = SpinConfiguration(nx, ny, int(n/2) + 1, lowest_eignstates=1, delta=delta, lamb=lamb, print_data=False, S = S)
-    # U that should be used is up to 1e5
-    sc.generate_hamiltonian(U = U)
-    sc.get_eigva_eigve()
-    min_e1, gs_state = sc.get_ground_state()
+    print(f'Ground state energy E_0/J = {round(min_e, 7)}')
+    print(f'GS energy per-site: e_0/J = {round(min_e/n, 7)}')
 
-    print(f'Energy gap E/2S: {np.round((min_e1 - min_e)/(2*S), 3)}')
+    sum_12 = 0
 
-    #print(f'Ground state energy E_0/J = {round(min_e, 7)}')
-    #print(f'GS energy per-site: e_0/J = {round(min_e/n, 7)}')
+    rotation_map = sc.rotation_map
+
+    for repr, basis in sc.representatives.items():
+        contr = np.square(sc.gs_in_basis[basis])
+        cfg = sc.map_int_to_config(repr).reshape((ny, nx))
+        eval = np.mean(cfg * rotation_map + (3 - cfg) * (1 - rotation_map))
+        sum_12 += contr * eval
+
+    print(U*(sum_12 - 3/2))

@@ -44,7 +44,7 @@ class SpinConfiguration:
         if self.magnon_number > self.n:
             raise ValueError('Magnon number should be smaller than the system size')
         
-        self.size = int(binom(self.n, self.magnon_number))
+        self.size = int(binom(self.n-1, self.magnon_number))
         #self.generate_spin_configurations()
         self.get_representations()
 
@@ -219,8 +219,7 @@ class SpinConfiguration:
         for trans in all_translations:
             for t in trans:
                 # allow only even translations, as rotation map is invariant to ONLY EVEN T
-                if np.sum(t) % 2 == 0:
-                    translations.append(t)
+                translations.append(t)
                 
         weight_matrices = []
         
@@ -259,7 +258,7 @@ class SpinConfiguration:
                 val |= 1 << (self.n - 1 - i)
             return val
 
-        for bosons_on_sites in tqdm(combinations(range(self.n), self.magnon_number), total=int(self.size), disable=not self.print):
+        for bosons_on_sites in tqdm(combinations(range(1, self.n), self.magnon_number), total=int(self.size), disable=not self.print):
             state = bitmask(bosons_on_sites)
             norm, all_states = get_periodicities(state)
             if norm is not None:

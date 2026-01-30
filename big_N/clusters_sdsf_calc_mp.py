@@ -1,4 +1,3 @@
-from clusters_lattice_bigN_sym import SpinConfiguration
 import numpy as np
 import matplotlib.pyplot as plt
 import time
@@ -11,6 +10,8 @@ import multiprocessing as mp
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from tqdm import tqdm
+from paths import *
+from clusters_lattice_bigN import SpinConfiguration
 
 class SpinCorrelatorMachine:
     
@@ -43,27 +44,27 @@ class SpinCorrelatorMachine:
         points_mag = np.zeros( (get_n_lowest, len(self.k_points)) )
         # energy differences from GS
         points_en = np.zeros( (get_n_lowest, len(self.k_points)) )
-        
-        if self.sc is None:
-            self.sc = SpinConfiguration(key=self.key, magnon_number=self.mag, delta = self.delta, J2overJ1=self.J2, lamb=self.lamb, 
-                                        lowest_eignstates=1, print_data=self.print_data)
-        else:
-            self.sc.get_hamiltonian(lamb=self.lamb, delta=self.delta)
-            self.sc.get_eigva_eigve()
-        
-        gs_en, gs_state = self.sc.get_ground_state()
+
+        fname = fr'{EIGN_PATH}/{self.key}_k={np.array([0., 0.])}_d={self.delta}_l={self.lamb}_Sz={0}'
+
+        gs_en = np.loadtxt(f'{fname}_en.txt')[0]
+        gs_state = np.loadtxt(f'{fname}_vec.txt')[:, 0]
+
         self.gs_en = gs_en
         self.gs_state = gs_state
+
+        self.sc = SpinConfiguration(key=key, helper_mode=True)
         
         for ik, k in enumerate(self.k_points):
             if self.print_data:
                 print(f'Calculating SDSF for k = {k}')
             
             if not (k[0] == 0 and k[1] == 0):
-                self.sc.get_hamiltonian(k=k, lamb=self.lamb, delta=self.delta)
-            
-            energy, states = self.sc.get_eigva_eigve(n_states=get_n_lowest)
+                fname = fr'{EIGN_PATH}/{self.key}_k={k}_d={self.delta}_l={self.lamb}_Sz={0}'
 
+            energy = np.loadtxt(f'{fname}_en.txt')
+            states = np.loadtxt(f'{fname}_vec.txt')
+            
             non_gs_states : np.ndarray = states
 
             dEnergy = energy - self.gs_en
@@ -133,7 +134,6 @@ class SpinCorrelatorMachine:
                 
             Szk_amp /= len(translations)
 
-
             results.append({
                 'basis': ii,
                 'coeff': Szk_amp * norm,
@@ -149,11 +149,8 @@ class SpinCorrelatorMachine:
             
             self.S_z_k_mapped[ii] = coeff
 
-    def get_SDSF_minus(self, get_n_lowest = 50, print_en_diff = False):
 
-        if self.sc_minus_helper is not None:
-            self.sc_minus_helper.delta = self.delta
-            self.sc_minus_helper.lamb = self.lamb
+    def get_SDSF_minus(self, get_n_lowest = 50, print_en_diff = False):
         
         # magnitudes
         points_mag = np.zeros( (get_n_lowest, len(self.k_points)) )
@@ -161,29 +158,35 @@ class SpinCorrelatorMachine:
         points_en = np.zeros( (get_n_lowest, len(self.k_points)) )
         
         if self.sc is None:
-            self.sc = SpinConfiguration(key=self.key, magnon_number=self.mag, delta = self.delta, lamb=self.lamb, J2overJ1=self.J2, 
-                                        lowest_eignstates=1, print_data=self.print_data)
-        else:
-            self.sc.get_hamiltonian(lamb=self.lamb, delta=self.delta)
-            self.sc.get_eigva_eigve()
+            self.sc = SpinConfiguration(key=self.key, helper_mode=True)
         
-        gs_en, gs_state = self.sc.get_ground_state()
+        if self.print_data:
+            print('Loading ground state energy and vector')
+
+        fname = fr'{EIGN_PATH}/{self.key}_k={np.array([0., 0.])}_d={self.delta}_l={self.lamb}_Sz={0}'
+
+        gs_en = np.loadtxt(f'{fname}_en.txt')[0]
+        gs_state = np.loadtxt(f'{fname}_vec.txt', dtype=np.complex64)[:, 0]
+
         self.gs_en = gs_en
         self.gs_state = gs_state
         
         for ik, k in enumerate(self.k_points):
             if self.print_data:
-                print(f'Calculating SDSF for k = {k}')
+                print(f'Calculating k = {k}')
             
             if self.sc_minus_helper is None:
                 if self.print_data:
-                    print('Calculating Sz=-1 helper...')
-                self.sc_minus_helper = SpinConfiguration(key=self.key, magnon_number=self.mag - 1, delta=self.delta, lamb=self.lamb, 
-                                                        J2overJ1=self.J2, lowest_eignstates=get_n_lowest, print_data=self.print_data)
-            else:
-                self.sc_minus_helper.get_hamiltonian(k=k, lamb=self.lamb, delta=self.delta)
-            
-            energy, states = self.sc_minus_helper.get_eigva_eigve(n_states=get_n_lowest)
+                    print('Getting Sz=1 helper...')
+                self.sc_minus_helper = SpinConfiguration(key=self.key, magnon_number=int(int(self.key[:2])/2)+1, helper_mode=True)
+
+            if self.print_data:
+                print('Loading eigenstates and eigenenergies')
+
+            fname = fr'{EIGN_PATH}/{self.key}_k={k}_d={self.delta}_l={self.lamb}_Sz={1}'
+
+            energy = np.loadtxt(f'{fname}_en.txt')
+            states = np.loadtxt(f'{fname}_vec.txt', dtype=np.complex64)
 
             non_gs_states : np.ndarray = states
 
@@ -193,7 +196,6 @@ class SpinCorrelatorMachine:
                 print(f'Highest energy difference: {round(dEnergy[-1], 5)}J')
                 print(f'Lowest energy difference: {round(dEnergy[0], 5)}J')
 
-            
             # get S^z_k maps
             x_exp = np.exp(1j * np.pi * k[0] * np.arange(self.sc.cluster.bigmap_side))
             y_exp = np.exp(1j * np.pi * k[1] * np.arange(self.sc.cluster.bigmap_side))
@@ -202,9 +204,8 @@ class SpinCorrelatorMachine:
             self.S_minus_k_mapped_gs = np.zeros(len(self.sc_minus_helper.representatives), dtype=np.complex64)
             
             n_workers = mp.cpu_count()
-            #n_workers = 5
             # Split work into chunks for parallel processing
-            chunk_size = np.ceil(len(self.sc.representatives) / n_workers)
+            chunk_size = len(self.sc.representatives) // n_workers + 1
             
             with ProcessPoolExecutor(max_workers=n_workers) as executor:
                 # Submit chunks
@@ -235,19 +236,19 @@ class SpinCorrelatorMachine:
         return points_mag, points_en
 
     def _process_sminus_batch(self, representatives):
-        """Process a batch of states for hamiltonian calculation."""
+        """Process a batch of states."""
         results = []
         norm = 1. / np.sqrt(float(self.n))
 
         for repr, coeff in representatives:
             config = self.sc.map_int_to_config(repr)
             
-            int_shifts = self.sc.weight_matrix * self.sc.cluster.cluster_map * config
+            int_shifts = self.sc.weight_matrix * self.sc.cluster.cluster_map * (1 - config)
             
-            for x, y in zip(*np.where(config == 1)):
-                state_flipped = repr - int_shifts[x, y]
+            for x, y in zip(*np.where(int_shifts != 0)):
+                state_flipped = repr + int_shifts[x, y]
                 repr_f, translations = self.sc_minus_helper.roll_to_repr(state_flipped)
-                #repr_f, translations = self.sc_minus_helper.get_representative[state_flipped]
+                
                 ind = self.sc_minus_helper.representatives[repr_f]
 
                 phase = self.phase_map[x, y]
@@ -255,8 +256,8 @@ class SpinCorrelatorMachine:
                 # average over all translations
                 phase_r_2 = 0
                 for trans in translations:
-                    trans = np.array(trans)
-                    phase_r_2 += self.phase_map[*trans]
+                    ty, tx = np.array(trans)
+                    phase_r_2 += self.phase_map[ty, tx]
                 
                 phase_r_2 /= len(translations)
                         
@@ -278,7 +279,7 @@ class SpinCorrelatorMachine:
             self.S_minus_k_mapped_gs[ind] += coeff
 
 
-def get_SDSF(scm = None, key = '16B', lamb = 1, delta = 1, dir = '+-', plot = False, print_data = False, to_diameter = False, graph_normalized = False, marker_s = 20, k_lowest = 150, save = False):
+def get_SDSF(scm = None, key = '16B', lamb = 1, delta = 1, dir = '+-', plot = False, print_data = False, save = True):
     
     clust = Cluster(key=key)
     _, k_points = clust.get_k_space()
@@ -291,9 +292,9 @@ def get_SDSF(scm = None, key = '16B', lamb = 1, delta = 1, dir = '+-', plot = Fa
     scm.delta = delta
     
     if dir == 'zz':
-        p_s, p_x = scm.get_SDSF_zz(print_en_diff=False, get_n_lowest=k_lowest)
+        p_s, p_x = scm.get_SDSF_zz(print_en_diff=False)
     else:
-        p_s, p_x = scm.get_SDSF_minus(print_en_diff=False, get_n_lowest=k_lowest)
+        p_s, p_x = scm.get_SDSF_minus(print_en_diff=True)
     
     p_s = np.round(p_s, 9)
     #print('Rounding result to the 1e-9 to reduce numerical inaccuracies')
@@ -309,13 +310,7 @@ def get_SDSF(scm = None, key = '16B', lamb = 1, delta = 1, dir = '+-', plot = Fa
     #print(f'Max magnitude of the overlap: {np.max(p_s)}')
     
     if plot:
-        if graph_normalized:
-            sizes = (p_s/np.max(p_s)*marker_s)
-        else:
-            sizes = p_s*marker_s
-        
-        if to_diameter:
-            sizes = sizes**2
+        sizes = p_s*20
         
         from fractions import Fraction
         
@@ -384,50 +379,50 @@ def save_process_data_to_txt(filename : str,label : str, exec_time : float):
         file.write(label + mp_text + time_text + '\n')
 
 
-
-def get_lambda_var(key = '18A', filename = '', delta = 1., n_low = 25):
+def get_lambda_var(key = '32A', filename = '', delta = 1.):
     
-    variables = [1., .75, .5, .25,  0.]
-    #variables = [1., 0.]
-    
+    variables = [0.]
     scm = None
-    for var in variables:
-        start_time = time.time()
-        scm = get_SDSF(scm, key, lamb=var, delta=delta, dir='+-', plot=False, print_data = False, k_lowest=n_low)
-        work_time = time.time() - start_time
-        save_process_data_to_txt(filename=filename, label = f'S+-, l: {var}, d: {delta}, key: {key}, n_low: {n_low}, ', exec_time=work_time)
-    
     
     for var in variables:
         start_time = time.time()
-        scm = get_SDSF(scm, key, lamb=var, delta=delta, dir='zz', plot=False, print_data = True, k_lowest=n_low)
+        scm = get_SDSF(scm, key, lamb=var, delta=delta, dir='+-', plot=False, print_data = True)
         work_time = time.time() - start_time
-        save_process_data_to_txt(filename=filename, label = f'Szz, l: {var}, d: {delta}, key: {key}, n_low: {n_low}, ', exec_time=work_time)
-
-
-
-def get_delta_var(key = '18A', filename = '', lamb = 1., n_low = 25):
+        save_process_data_to_txt(filename=filename, label = f'S+-, l: {var}, d: {delta}, key: {key}, ', exec_time=work_time)
     
-    variables = [2., 1., .75, .5, .25,  0.]
+    
+    #for var in variables:
+    #    start_time = time.time()
+    #    scm = get_SDSF(scm, key, lamb=var, delta=delta, dir='zz', plot=False, print_data = True)
+    #    work_time = time.time() - start_time
+    #    save_process_data_to_txt(filename=filename, label = f'Szz, l: {var}, d: {delta}, key: {key}, ', exec_time=work_time)
+
+
+
+def get_delta_var(key = '18A', filename = '', lamb = 1.):
+    
+    variables = [2.]
     scm = None
 
     for var in variables:
         start_time = time.time()
-        scm = get_SDSF(scm, key, lamb=lamb, delta=var, dir='+-', plot=False, print_data = False, k_lowest=n_low)
+        scm = get_SDSF(scm, key, lamb=lamb, delta=var, dir='+-', plot=False, print_data = True)
         work_time = time.time() - start_time
-        save_process_data_to_txt(filename=filename, label = f'S+-, l: {lamb}, d: {var}, key: {key}, n_low: {n_low}, ', exec_time=work_time)
+        save_process_data_to_txt(filename=filename, label = f'S+-, l: {lamb}, d: {var}, key: {key}, ', exec_time=work_time)
     
     
-    for var in variables:
-        start_time = time.time()
-        scm = get_SDSF(scm, key, lamb=lamb, delta=var, dir='zz', plot=False, print_data = False, k_lowest=n_low)
-        work_time = time.time() - start_time
-        save_process_data_to_txt(filename=filename, label = f'Szz, l: {lamb}, d: {var}, key: {key}, n_low: {n_low}, ', exec_time=work_time)
+    #for var in variables:
+    #    start_time = time.time()
+    #    scm = get_SDSF(scm, key, lamb=lamb, delta=var, dir='zz', plot=False, print_data = True)
+    #    work_time = time.time() - start_time
+    #    save_process_data_to_txt(filename=filename, label = f'Szz, l: {lamb}, d: {var}, key: {key}, ', exec_time=work_time)
+
 
 if __name__ == "__main__":
-    key = '24A'
-    n_low = 25
+    key = '32A'
     date_time = time.asctime(time.localtime()).replace(' ', '_').replace(':', '_')
     filename = rf"{key}__{date_time}.txt"
-    get_lambda_var(key, filename, n_low=n_low)
-    #get_delta_var(key, filename, n_low=n_low)
+
+    get_lambda_var(key, filename, delta=1.)
+
+    #get_delta_var(key, filename, lamb=1.)
