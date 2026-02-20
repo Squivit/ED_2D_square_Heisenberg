@@ -223,7 +223,7 @@ class Representation():
                         y, x = np.where(config_int_shift == int_shift)
                         sign = 1. if config[y[0], x[0]] == 0 else -1
 
-                        if sign == -1.:
+                        if sign == 1.:
                             flipped_cfg = map_int_to_config(config_int + int_shift)
                         else:
                             flipped_cfg = config.copy()
@@ -237,7 +237,7 @@ class Representation():
                         roll_rot_xy = np.roll(flipped_roll_rot, (y, x), (0, 1))
                         
                         #eta_phases.append( np.mod( sign + extended_phase(rot_xy) + extended_phase(roll_rot_xy) , 2 * np.pi))
-                        eta_phases.append( sign * np.mod( thetas[id] + extended_phase(rot_xy) + extended_phase(roll_rot_xy) , 2 * np.pi))
+                        eta_phases.append( sign * np.mod( -thetas[id] + extended_phase(rot_xy) + extended_phase(roll_rot_xy) , 2 * np.pi))
 
         print(len(eta_phases))
         print(np.mean(eta_phases))
@@ -245,8 +245,8 @@ class Representation():
 
 
 if __name__ == '__main__':
-    nx = 4
-    ny = 6
+    nx = 6
+    ny = 4
 
     k_max = 0
     mag = int((nx * ny)/2)

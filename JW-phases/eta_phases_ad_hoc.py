@@ -94,7 +94,7 @@ class Representation():
         self.size = len(all_states)
         
         # Split work into chunks for parallel processing
-        chunk_size = min(250000, self.size // (n_workers) + 1)
+        chunk_size = self.size // (n_workers) + 1
         
         # Initialize results storage
         self.representatives = []
@@ -253,7 +253,6 @@ class Representation():
         flips = [self.flips_change_side, self.flips_change_up]  # x and y directions
         # Calculations overcount one theta_ij phase, so it needs to be removed later
         thetas = [0, np.pi/2]  # x and y directions
-        #thetas = [0, 0]  # x and y directions
 
         eta_phases = []
 
@@ -286,9 +285,10 @@ class Representation():
                         # sign to check whether it was S+S- or S-S+, as it:
                         # 1) conjugetes the exponent (-1. sign in the phase)
                         # 2) changes whether we calculate phase on the flipped or original state (see pdf with Hamiltonian)
-                        sign = 1. if config[y, x] == 0 else -1.
+                        # if config[i] == 0, we can only act with S+S-, which is -1
+                        sign = -1. if config[y, x] == 0 else 1.
 
-                        if sign == 1:
+                        if sign == -1.:
                             flipped_cfg = map_int_to_config(config_int + int_shift)
                         else:
                             # it's only flipped by name, it's the original state
@@ -319,8 +319,8 @@ class Representation():
 
 
 if __name__ == '__main__':
-    nx = 4
-    ny = 6
+    nx = 6
+    ny = 4
 
     k_max = 0
     mag = int((nx * ny)/2)

@@ -334,9 +334,13 @@ class SpinConfiguration:
 
 
 if __name__ == "__main__":
-    nx = 4
+    nx = 6
     ny = 4
     n = nx*ny
+
+    delta = 1.
+    lamb = 0.
+    eta = 0.
     
     k_points = []
     
@@ -348,20 +352,15 @@ if __name__ == "__main__":
     for ky in k_y:
         k_points.append( np.array( [1, ky] ) )
 
-    sc = SpinConfiguration(nx, ny, int(n/2), lowest_eignstates=5, delta=1., J2overJ1=1., lamb=0., eta=1., print_data=False)
+    sc = SpinConfiguration(nx, ny, int(n/2), lowest_eignstates=5, delta=delta, lamb=lamb, eta=eta, print_data=True)
     min_e, gs_state = sc.get_ground_state()
     
     print(f'Ground state energy E_0/J = {round(min_e, 7)}')
     print(f'GS energy per-site: e_0/J = {-2*round(min_e/n, 7)}')
     eign = sc.get_eigva_eigve(5)[0]
     print(np.round(eign, 6))
+
+    sc = SpinConfiguration(nx, ny, int(n/2) - 1, lowest_eignstates=1, delta=delta, lamb=lamb, eta=eta, print_data=True)
+    min_e_1, _ = sc.get_ground_state()
     
-
-
-    """
-    for k in k_points:
-        print(f'k=({'𝛑/' + str(int(1/k[0])) if k[0] % 1 != 0 else '0' if k[0] == 0 else str(int(k[0])) + '𝛑'}, {'𝛑/' + str(int(1/k[1])) if k[1] % 1 != 0 else '0' if k[1] == 0 else str(int(k[1])) + '𝛑'})')
-        sc.generate_hamiltonian(k=k)
-        sc.get_eigva_eigve()
-        print(np.round(sc.eign_en[:1], 4))
-    """    
+    print(f'Gap: {min_e_1 - min_e}')
