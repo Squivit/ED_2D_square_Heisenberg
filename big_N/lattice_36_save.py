@@ -9,10 +9,6 @@ from scipy.special import binom
 from scipy.sparse.linalg import eigsh
 from scipy.sparse import csr_matrix, save_npz, load_npz
 
-import matplotlib.pyplot as plt
-
-from Betts_cluster import Cluster
-
 from concurrent.futures import ProcessPoolExecutor, as_completed
 import multiprocessing as mp
 
@@ -21,24 +17,18 @@ from tqdm import tqdm
 
 class SpinConfiguration:
     
-    def __init__(self, N = 16, number = 'A', key = None, magnon_number = -1, delta = 1., lamb= 1., k = np.array([0., 0.]), n_workers = None,
+    def __init__(self, nx = 6, ny = 6, magnon_number = -1, delta = 1., k = np.array([0., 0.]), n_workers = None,
                  lowest_eignstates = 1, print_data = False, force_ham_gen = False, save_ham = True, eigva_ve_only = False, helper_mode = False):
         """
         k is in units of pi
         """
-        
+
         self.print = print_data
         self.n_lowest = lowest_eignstates
-        self.n_workers = n_workers
 
-        if key == None:
-            self.n = N
-            key = str(N)+number
-        else:
-            self.n = int(key[:2])
-            number = key[-1]
-
-        self.key = key
+        self.nx = nx
+        self.ny = ny
+        self.n = nx * ny
 
         if magnon_number == -1:
             self.magnon_number = int(self.n/2)
@@ -47,31 +37,27 @@ class SpinConfiguration:
 
         self.delta = delta
         self.k = k
-        self.lamb = lamb
-        
-        # side lenghts optimized for 18A, 24A and 32A
-        side = 18
-        if self.n > 24:
-            side = 26
-
-        self.cluster = Cluster(N=self.n, num=number, key=key, bigmap_shift=0, bigmap_side=side)
-                                
-        self.weight_matrix = self.cluster.bosons_to_cluster_rolled(array([ 2**(ii-1) for ii in range(self.n, 0, -1)]))
+                                        
+        self.weight_matrix = array([ 2**(ii-1) for ii in range(self.n, 0, -1)]).reshape((self.ny, self.nx))
         
         self.precompute_flips_change()
         
-        self.rotation_map = ones(self.cluster.cluster_map.shape)
-        self.rotation_map = self.rotation_map * array( [ [ (1+(-1)**(x+y))/2 for x in range(self.rotation_map.shape[0]) ] for y in range(self.rotation_map.shape[1]) ] )
+        self.rotation_map = array( [ [ (1+(-1)**(x+y))/2 for x in range(self.nx) ] for y in range(self.ny) ] ).reshape((self.ny, self.nx))
         
-        coords = self.cluster.sorted_coords
-        cluster_map = self.cluster.cluster_map
-        
+        xs = np.arange(self.nx)
+        ys = np.arange(self.ny)
+        all_tr = [ [ (-int(y), -int(x)) for x in xs ] for y in ys ]
+
         # Pre-compute translations (even only)
-        translations = [trans for trans in coords if np.sum(trans) % 2 == 0]
+        translations = []
         
+        for trans in all_tr:
+            for t in trans:
+                translations.append(t)
+
         # Pre-compute weight matrices and store as instance variable
         self.weight_matrices = [
-            ((cluster_map * np.roll(self.weight_matrix, np.array(t), axis=(0, 1))).ravel(), t)
+            ((np.roll(self.weight_matrix, np.array(t), axis=(0, 1))).ravel(), t)
             for t in translations
         ]
 
@@ -81,31 +67,29 @@ class SpinConfiguration:
         if self.magnon_number > self.n:
             raise ValueError('Magnon number should be smaller than the system size')
         
-        self.size = int(binom(self.n, self.magnon_number))
+        self.size = int(binom(self.n - 1, self.magnon_number))
 
         if not eigva_ve_only:
-            self.get_representations()
+            self.get_representations(n_workers=n_workers)
 
         if not helper_mode:
 
             self.save_ham = save_ham
-            self.get_hamiltonian(force_ham_gen=force_ham_gen)
+            self.get_hamiltonian(force_ham_gen=force_ham_gen, n_workers=n_workers)
             
-            start = time()
-
-            self.get_eigva_eigve()
-            
-            if print_data:
-                print(f'Finding eigvals and eigvecs took: {round(time()-start, 5)} s')
+            #start = time()
+            #self.get_eigva_eigve()
+            #if print_data:
+            #    print(f'Finding eigvals and eigvecs took: {round(time()-start, 5)} s')
+        
+        if self.print:
+            print('Finished process')
     
 
-    def get_hamiltonian(self, k = None, lamb = None, delta = None, force_ham_gen = False):
+    def get_hamiltonian(self, k = None, delta = None, force_ham_gen = False, n_workers = None):
         
         if k is None:
             k = self.k
-
-        if lamb is not None:
-            self.lamb = lamb
 
         if delta is not None:
             self.delta = delta
@@ -114,7 +98,7 @@ class SpinConfiguration:
         
         # forcing generation of the new hamiltonian
         if force_ham_gen:
-            self.generate_hamiltonian(k)
+            self.generate_hamiltonian(k, n_workers=n_workers)
             return
         
         if self.print:
@@ -123,27 +107,14 @@ class SpinConfiguration:
         hamilonians = [f for f in os.listdir(HAMILTONIAN_PATH) if os.path.isfile(os.path.join(HAMILTONIAN_PATH, f))]
 
         # there is a correct hamiltonian saved
-        if hamilonians.__contains__(f'{self.key}_k={k}_d={self.delta}_l={self.lamb}_Sz={abs(int(self.n/2) - self.magnon_number)}.npz'):
-            self.hamiltonian = load_npz(fr'{HAMILTONIAN_PATH}/{self.key}_k={k}_d={self.delta}_l={self.lamb}_Sz={abs(int(self.n/2) - self.magnon_number)}.npz')
+        if hamilonians.__contains__(f'{self.nx}x{self.ny}_k={k}_d={self.delta}_Sz={abs(int(self.n/2) - self.magnon_number)}.npz'):
+            self.hamiltonian = load_npz(fr'{HAMILTONIAN_PATH}/{self.nx}x{self.ny}_k={k}_d={self.delta}_Sz={abs(int(self.n/2) - self.magnon_number)}.npz')
             if self.print:
                 print('Hamiltonian loaded successfully.')
 
-
-        # check if there is a hamiltonian with D=1, l=1
-        elif hamilonians.__contains__(f'{self.key}_k={k}_d=1.0_l=1.0_Sz={abs(int(self.n/2) - self.magnon_number)}.npz'):
-
-            from clusters_param_change import Parameter_Changer
-            pc = Parameter_Changer(key=self.key, magnon_number=self.magnon_number)
-            ham_1_1 = load_npz(fr'{HAMILTONIAN_PATH}/{self.key}_k={k}_d=1.0_l=1.0_Sz={abs(int(self.n/2) - self.magnon_number)}.npz')
-            self.hamiltonian = pc.change_parameters(ham_1_1, self.delta, self.lamb, _print=self.print)
-
-            if self.print:
-                print('Hamiltonian loaded and parameters changed successfully.')
-
-
         # no hamiltonian, create and save one
         else:
-            self.generate_hamiltonian(k)
+            self.generate_hamiltonian(k, n_workers=n_workers)
     
     
     def generate_hamiltonian(self, k = None, n_workers = None):
@@ -156,6 +127,9 @@ class SpinConfiguration:
             print('No hamiltonian to read or forced to start generation.')
 
         start = time()
+
+        if k is not None:
+            self.k = k
         
         self.hamiltonian_elements = []
         self.ham_i = []
@@ -169,15 +143,12 @@ class SpinConfiguration:
         easy_ks = [0., 2.]
         
         if easy_ks.__contains__(k[0]) and easy_ks.__contains__(k[1]):
-            self.d_type = np.float32
+            self.d_type = np.float64
         else:
-            self.d_type = np.complex64
+            self.d_type = np.complex128
 
         if n_workers is None:
-            if self.n_workers is None:
-                n_workers = mp.cpu_count()
-            else:
-                n_workers = self.n_workers
+            n_workers = mp.cpu_count()
 
         # Split work into chunks for parallel processing
         chunk_size = len(self.representatives) // (n_workers) + 1
@@ -203,8 +174,8 @@ class SpinConfiguration:
 
         repr_size = len(self.representatives)
 
-        self.hamiltonian = csr_matrix((array(self.hamiltonian_elements, dtype=self.d_type), (array(self.ham_i, dtype=int), array(self.ham_j, dtype=int))), shape=(repr_size, repr_size))
-        
+        self.hamiltonian = csr_matrix((array(self.hamiltonian_elements, dtype=self.d_type), (array(self.ham_i, dtype=np.int64), array(self.ham_j, dtype=np.int64))), shape=(repr_size, repr_size))
+
         if self.print:
             print(f'Getting H took: {round(time()-start, 5)} s')
         
@@ -214,16 +185,17 @@ class SpinConfiguration:
     
     def _process_hamiltonian_batch(self, representatives):
         """Process a batch of states for hamiltonian calculation."""
-        results = []
+
+        state_results = []
+        energy_results = []
+        flip_state_results = []
+        flip_energy_results = []
         
         map_int_to_basis = self.map_int_to_basis
-        map_int_to_config = self.map_int_to_config_extended
-        rotation_map = self.rotation_map
-        cluster_map = self.cluster.cluster_map
+        map_int_to_config = self.map_int_to_config
 
         from collections import defaultdict
         flipped_states_elements = defaultdict(self.d_type)
-        rotation_map = self.rotation_map
         
         # Directions for Heisenberg exchange
         directions = [(-1, 0), (0, -1)]  # x and y directions
@@ -232,6 +204,7 @@ class SpinConfiguration:
         easy_ks = [0., 2.]
         k = self.k
         is_easy_k = easy_ks.__contains__(k[0]) and easy_ks.__contains__(k[1])
+
         
         for repr, state in representatives:
             config = map_int_to_config(repr)
@@ -239,13 +212,10 @@ class SpinConfiguration:
             
             flipped_states_elements.clear()
             
-            if self.lamb != 1:
-                rot = (config * rotation_map + (1 - config) * (1 - rotation_map))
-
             for id, dir in enumerate(directions):
                 roll_config = roll(config, dir, axis=(0, 1))
                                 
-                possible_mixing = mod((config + roll_config) * cluster_map, 2)
+                possible_mixing = mod(config + roll_config, 2)
 
                 config_int_shift = array(possible_mixing * flips[id], dtype=float)
                 # multiplying to account for sign
@@ -265,33 +235,33 @@ class SpinConfiguration:
                         flipped_states_elements[basis_index] += element
                     
                 # Sz-Sz interaction energies
-                self_energy -= self.delta * 0.5 * sum(mod(cluster_map*(config + roll_config), 2))
-
-                if self.lamb != 1:
-                    self_energy -= self.delta * (self.lamb - 1) * sum(cluster_map*(rot * roll(rot, dir, axis=(0, 1))))
+                self_energy -= self.delta * 0.5 * sum(mod(config + roll_config, 2))
             
-            results.append({
-                'state': map_int_to_basis(repr),
-                'energy': self_energy,
-                'flips': flipped_states_elements.copy(),
-            })
+            state_results.append(map_int_to_basis(repr))
+            energy_results.append(self_energy)
+            flip_state_results.append(list(flipped_states_elements.keys()))
+            flip_energy_results.append(list(flipped_states_elements.values()))
                     
-        return results
+        return (state_results, energy_results, flip_state_results, flip_energy_results)
     
     def _merge_ham_results(self, batch_results):
         """Merge results from a batch into main storage."""
-        for result in batch_results:
-            state = result['state']
-            self_energy = result['energy']
-            flipped_states_elements : dict = result['flips']
-            
-            self.ham_i.extend([state]*len(flipped_states_elements))
-            self.ham_j.extend(flipped_states_elements.keys())
-            self.hamiltonian_elements.extend(flipped_states_elements.values())
 
-            self.ham_i.extend(flipped_states_elements.keys())
-            self.ham_j.extend([state]*len(flipped_states_elements))
-            self.hamiltonian_elements.extend(np.conj(np.array(list(flipped_states_elements.values()))))
+        state_results, energy_results, flip_state_results, flip_energy_results = batch_results
+
+        for ir in range(len(state_results)):
+            state = state_results[ir]
+            self_energy = energy_results[ir]
+            flipped_states : list = flip_state_results[ir]
+            flip_energies : list = flip_energy_results[ir]
+            
+            self.ham_i.extend([state]*len(flipped_states))
+            self.ham_j.extend(flipped_states)
+            self.hamiltonian_elements.extend(flip_energies)
+
+            self.ham_i.extend(flipped_states)
+            self.ham_j.extend([state]*len(flipped_states))
+            self.hamiltonian_elements.extend(np.conj(np.array(flip_energies)))
 
             self.ham_i.append(state)
             self.ham_j.append(state)
@@ -302,10 +272,10 @@ class SpinConfiguration:
         Precomputed change in the int index of the state with the spin flip term in Heisenberg Ham.
         """
         weight_rolled = roll(self.weight_matrix, (0, -1), axis=(0, 1))
-        self.flips_change_up = array(self.cluster.cluster_map*(self.weight_matrix - weight_rolled), dtype=int)
+        self.flips_change_up = array(self.weight_matrix - weight_rolled, dtype=int)
 
         weight_rolled = roll(self.weight_matrix, (-1, 0), axis=(0, 1))
-        self.flips_change_side = array(self.cluster.cluster_map*(self.weight_matrix - weight_rolled), dtype=int)
+        self.flips_change_side = array(self.weight_matrix - weight_rolled, dtype=int)
         
     
     def get_eigva_eigve(self, n_states:int=None):
@@ -386,7 +356,7 @@ class SpinConfiguration:
             # Submit chunks
             futures = []
             chunk = []
-            for combo in tqdm(combinations(range(self.n), self.magnon_number), total = self.size, mininterval=5., disable = not self.print):
+            for combo in tqdm(combinations(range(1, self.n), self.magnon_number), total = self.size, mininterval=5.):
                 chunk.append(bitmask(combo))
                 
                 if len(chunk) >= chunk_size:
@@ -406,17 +376,18 @@ class SpinConfiguration:
 
         # Create final representative enumeration
         self.representatives = {r: i for i, r in enumerate(self.representatives)}
-        
+
         if self.print:
             print(f'Total representatives found: {len(self.representatives)}')
-            print(f'Matrix reduction: {round(self.size/len(self.representatives), 1)}:1')
+            print(f'Matrix reduction: {round(2*self.size/len(self.representatives), 1)}:1')
 
         self.save_representatives()
 
     
     def _process_state_batch(self, states):
         """Process a batch of states."""
-        results = []
+        state_results = []
+        norm_results = []
         
         for state_int in states:
             # Convert to config using the proper mapping
@@ -435,19 +406,18 @@ class SpinConfiguration:
                 set_states.add(rolled_state_int)
             
             if is_representative:
-                results.append({
-                    'state': state_int,
-                    'norm': len(set_states),
-                })
+                state_results.append(state_int)
+                norm_results.append(len(set_states))
             
-        return results
+        return (state_results, norm_results)
     
+
     def _merge_results(self, batch_results):
         """Merge results from a batch into main storage."""
-        for result in batch_results:
-            state = result['state']
-            norm = result['norm']
-            
+
+        state_results, norm_results = batch_results
+
+        for state, norm in zip(state_results, norm_results):
             self.representatives.append(state)
             self.norms[state] = norm
     
@@ -479,7 +449,7 @@ class SpinConfiguration:
         except:
             pass
 
-        fname = fr'{HAMILTONIAN_PATH}/{self.key}_k={self.k}_d={self.delta}_l={self.lamb}_Sz={abs(int(self.n/2) - self.magnon_number)}.npz'
+        fname = fr'{HAMILTONIAN_PATH}/{self.nx}x{self.ny}_k={self.k}_d={self.delta}_Sz={abs(int(self.n/2) - self.magnon_number)}.npz'
 
         save_npz(fname, self.hamiltonian)
 
@@ -489,24 +459,24 @@ class SpinConfiguration:
         except:
             pass
 
-
         try:
-            fname = fr'{EIGN_PATH}/{self.key}_k={self.k}_d={self.delta}_l={self.lamb}_Sz={abs(int(self.n/2) - self.magnon_number)}_en.txt'
+            fname = fr'{EIGN_PATH}/{self.nx}x{self.ny}_k={self.k}_d={self.delta}_Sz={abs(int(self.n/2) - self.magnon_number)}_en.txt'
             np.savetxt(fname, self.eign_en)
 
-            fname = fr'{EIGN_PATH}/{self.key}_k={self.k}_d={self.delta}_l={self.lamb}_Sz={abs(int(self.n/2) - self.magnon_number)}_vec.txt'
+            fname = fr'{EIGN_PATH}/{self.nx}x{self.ny}_k={self.k}_d={self.delta}_Sz={abs(int(self.n/2) - self.magnon_number)}_vec.txt'
             np.savetxt(fname, self.eignstates)
         except:
             pass
     
+
     def load_representatives(self):
         try:
-            self.representatives = np.loadtxt(fr'{REPR_PATH}/{self.key}_Sz={abs(int(self.n/2) - self.magnon_number)}.txt')
+            self.representatives = np.loadtxt(fr'{REPR_PATH}/{self.nx}x{self.ny}_Sz={abs(int(self.n/2) - self.magnon_number)}.txt')
             self.representatives = np.array(self.representatives, dtype = np.int64)
             self.representatives = {r: i for i, r in enumerate(self.representatives)}
 
-            self.norms = np.loadtxt(fr'{REPR_PATH}/{self.key}_norms_Sz={abs(int(self.n/2) - self.magnon_number)}.txt')
-            keys = np.loadtxt(fr'{REPR_PATH}/{self.key}_norm_keys_Sz={abs(int(self.n/2) - self.magnon_number)}.txt')
+            self.norms = np.loadtxt(fr'{REPR_PATH}/{self.nx}x{self.ny}_norms_Sz={abs(int(self.n/2) - self.magnon_number)}.txt')
+            keys = np.loadtxt(fr'{REPR_PATH}/{self.nx}x{self.ny}_norm_keys_Sz={abs(int(self.n/2) - self.magnon_number)}.txt')
             self.norms = {np.int64(r): float(n) for r, n in zip(keys, self.norms)}
             keys = None
 
@@ -523,23 +493,16 @@ class SpinConfiguration:
             pass
 
         try:
-            np.savetxt(fr'{REPR_PATH}/{self.key}_Sz={abs(int(self.n/2) - self.magnon_number)}.txt', np.array(list(self.representatives.keys()), dtype = int))
-            np.savetxt(fr'{REPR_PATH}/{self.key}_norms_Sz={abs(int(self.n/2) - self.magnon_number)}.txt', list(self.norms.values()))
-            np.savetxt(fr'{REPR_PATH}/{self.key}_norm_keys_Sz={abs(int(self.n/2) - self.magnon_number)}.txt', list(self.norms.keys()))
+            np.savetxt(fr'{REPR_PATH}/{self.nx}x{self.ny}_Sz={abs(int(self.n/2) - self.magnon_number)}.txt', np.array(list(self.representatives.keys()), dtype = int))
+            np.savetxt(fr'{REPR_PATH}/{self.nx}x{self.ny}_norms_Sz={abs(int(self.n/2) - self.magnon_number)}.txt', list(self.norms.values()))
+            np.savetxt(fr'{REPR_PATH}/{self.nx}x{self.ny}_norm_keys_Sz={abs(int(self.n/2) - self.magnon_number)}.txt', list(self.norms.keys()))
         except:
             pass
 
+
     def map_int_to_config(self, n):
         """Map integer to configuration."""
-        return self.cluster.bosons_to_cluster(
-            array([(n >> i) & 1 for i in reversed(range(self.n))], dtype=uint8)
-        )
-    
-    def map_int_to_config_extended(self, n):
-        """Map integer to extended configuration."""
-        return self.cluster.bosons_to_cluster_rolled(
-            array([(n >> i) & 1 for i in reversed(range(self.n))], dtype=uint8)
-        )
+        return array([(n >> i) & 1 for i in reversed(range(self.n))], dtype=uint8).reshape((self.ny, self.nx))
     
     def map_int_to_basis(self, n):
         """Map integer to basis index."""
@@ -557,15 +520,13 @@ class SpinConfiguration:
 
 if __name__ == "__main__":
 
-    N = 24
-    num = 'A'
+    nx = 4
+    ny = 4
+    N = nx * ny
     
-    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)+0, lowest_eignstates=10, n_workers=8,
-                        delta=1., lamb=1., k=np.array([0., 0.]), print_data=True, force_ham_gen=True, eigva_ve_only=False, save_ham=False)
+    sc = SpinConfiguration(nx, ny, magnon_number=int(N/2)+0, lowest_eignstates=1, n_workers = 20,
+                        delta=1., k=np.array([0., 0.]), print_data=True, force_ham_gen=True, eigva_ve_only=False, save_ham=False)
     min_e, gs_state = sc.get_ground_state()
         
     print(f'Ground state energy E_0/J = {round(min_e, 5)}')
     print(f'GS energy per-site: e_0/J = {round(min_e/(N), 5)}')
-    
-    #eign = sc.get_eigva_eigve(5)[0]
-    #print(np.round(eign, 6))
