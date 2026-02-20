@@ -4,3 +4,5 @@
 /big_N/repr/
 data/
 old/
+__pycache__/
+plots/
