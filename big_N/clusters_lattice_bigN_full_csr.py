@@ -7,7 +7,7 @@ import os
 from scipy.special import binom
 
 from scipy.sparse.linalg import eigsh
-from scipy.sparse import csr_matrix, save_npz, load_npz
+from scipy.sparse import csr_matrix, lil_matrix, save_npz, load_npz
 
 from Betts_cluster import Cluster
 
@@ -169,6 +169,9 @@ class SpinConfiguration:
         else:
             self.d_type = np.complex64
 
+        repr_size = len(self.representatives)
+        self.hamiltonian = csr_matrix((array([], dtype=self.d_type), (array([], dtype=int), array([], dtype=int))), shape=(repr_size, repr_size))
+
         if n_workers is None:
             if self.n_workers is None:
                 n_workers = mp.cpu_count()
@@ -198,9 +201,6 @@ class SpinConfiguration:
                 batch_results = future.result()
                 self._merge_ham_results(batch_results)
 
-        repr_size = len(self.representatives)
-
-        self.hamiltonian = csr_matrix((array(self.hamiltonian_elements, dtype=self.d_type), (array(self.ham_i, dtype=int), array(self.ham_j, dtype=int))), shape=(repr_size, repr_size))
         
         if self.print:
             print(f'Getting H took: {round(time()-start, 5)} s')
@@ -214,10 +214,6 @@ class SpinConfiguration:
 
         start_ind, end_ind = params
 
-        results_states = []
-        results_energy = []
-        results_flips = []
-        
         map_int_to_basis = self.map_int_to_basis
         map_int_to_config = self.map_int_to_config_extended
         rotation_map = self.rotation_map
@@ -234,6 +230,9 @@ class SpinConfiguration:
         easy_ks = [0., 2.]
         k = self.k
         is_easy_k = easy_ks.__contains__(k[0]) and easy_ks.__contains__(k[1])
+
+        repr_size = len(self.representatives)
+        hamiltonian = lil_matrix((repr_size, repr_size), dtype=self.d_type)
         
         for _state, repr in enumerate(self.representatives[start_ind : end_ind]):
             config = map_int_to_config(repr)
@@ -267,7 +266,8 @@ class SpinConfiguration:
                         
                         element = 0.5 * phase * np.sqrt(repr_norm/self.norms[basis_index])
                         
-                        flipped_states_elements[basis_index] += element
+                        hamiltonian[state, basis_index] += element
+                        hamiltonian[basis_index, state] += np.conj(element)
                     
                 # Sz-Sz interaction energies
                 self_energy -= self.delta * 0.5 * sum(mod(cluster_map*(config + roll_config), 2))
@@ -275,28 +275,14 @@ class SpinConfiguration:
                 if self.lamb != 1:
                     self_energy -= self.delta * (self.lamb - 1) * sum(cluster_map*(rot * roll(rot, dir, axis=(0, 1))))
             
-            results_states.append(map_int_to_basis(repr))
-            results_energy.append(self_energy)
-            results_flips.append(flipped_states_elements.copy())
+            hamiltonian[state, state] = self_energy
                     
-        return (results_states, results_energy, results_flips)
+        return csr_matrix(hamiltonian)
     
-    def _merge_ham_results(self, batch_results):
+    def _merge_ham_results(self, batch_results : csr_matrix):
         """Merge results from a batch into main storage."""
-        results_states, results_energy, results_flips = batch_results
-        for state, self_energy, flipped_states_elements in zip(results_states, results_energy, results_flips):
 
-            self.ham_i.extend([state]*len(flipped_states_elements))
-            self.ham_j.extend(flipped_states_elements.keys())
-            self.hamiltonian_elements.extend(flipped_states_elements.values())
-
-            self.ham_i.extend(flipped_states_elements.keys())
-            self.ham_j.extend([state]*len(flipped_states_elements))
-            self.hamiltonian_elements.extend(np.conj(np.array(list(flipped_states_elements.values()))))
-
-            self.ham_i.append(state)
-            self.ham_j.append(state)
-            self.hamiltonian_elements.append(self_energy)
+        self.hamiltonian += batch_results
     
     def precompute_flips_change(self):
         """
@@ -475,7 +461,7 @@ if __name__ == "__main__":
     num = 'A'
     
     sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)+0, lowest_eignstates=10, n_workers=None,
-                        delta=1., lamb=1., k=np.array([0., 0.]), print_data=True, force_ham_gen=True, eigva_ve_only=False, save_ham=True)
+                        delta=1., lamb=1., k=np.array([0., 0.]), print_data=True, force_ham_gen=True, eigva_ve_only=False, save_ham=False)
     min_e, gs_state = sc.get_ground_state()
         
     print(f'Ground state energy E_0/J = {round(min_e, 5)}')
