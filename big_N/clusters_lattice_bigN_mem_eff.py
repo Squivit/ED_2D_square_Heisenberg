@@ -216,7 +216,9 @@ class SpinConfiguration:
 
         start_ind, end_ind = params
 
-        results = []
+        results_i = []
+        results_j = []
+        results_element = []
         
         map_int_to_basis = self.map_int_to_basis
         map_int_to_config = self.map_int_to_config_extended
@@ -275,32 +277,29 @@ class SpinConfiguration:
                 if self.lamb != 1:
                     self_energy -= self.delta * (self.lamb - 1) * sum(cluster_map*(rot * roll(rot, dir, axis=(0, 1))))
             
-            results.append({
-                'state': map_int_to_basis(repr),
-                'energy': self_energy,
-                'flips': flipped_states_elements.copy(),
-            })
-                    
-        return results
+            results_i.append(state)
+            results_j.append(state)
+            results_element.append(self_energy)
+
+            results_i.extend([state]*len(flipped_states_elements))
+            results_j.extend(flipped_states_elements.keys())
+            results_element.extend(flipped_states_elements.values())
+
+            results_i.extend(flipped_states_elements.keys())
+            results_j.extend([state]*len(flipped_states_elements))
+            results_element.extend(np.conj(np.array(list(flipped_states_elements.values()))))
+
+        return (np.array(results_i, dtype=np.int32),
+                np.array(results_j, dtype=np.int32),
+                np.array(results_element, dtype=self.d_type))
     
     def _merge_ham_results(self, batch_results):
         """Merge results from a batch into main storage."""
-        for result in batch_results:
-            state = result['state']
-            self_energy = result['energy']
-            flipped_states_elements : dict = result['flips']
-            
-            self.ham_i.extend([state]*len(flipped_states_elements))
-            self.ham_j.extend(flipped_states_elements.keys())
-            self.hamiltonian_elements.extend(flipped_states_elements.values())
+        results_i, results_j, results_element = batch_results
 
-            self.ham_i.extend(flipped_states_elements.keys())
-            self.ham_j.extend([state]*len(flipped_states_elements))
-            self.hamiltonian_elements.extend(np.conj(np.array(list(flipped_states_elements.values()))))
-
-            self.ham_i.append(state)
-            self.ham_j.append(state)
-            self.hamiltonian_elements.append(self_energy)
+        self.ham_i = np.concatenate( ( self.ham_i, results_i ) )
+        self.ham_j = np.concatenate( ( self.ham_j, results_j ) )
+        self.hamiltonian_elements = np.concatenate( ( self.hamiltonian_elements, results_element ) )
     
     def precompute_flips_change(self):
         """

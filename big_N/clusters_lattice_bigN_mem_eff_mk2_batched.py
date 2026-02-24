@@ -178,10 +178,12 @@ class SpinConfiguration:
             else:
                 n_workers = self.n_workers
 
+        n_batches = 10
+
         # Split work into chunks for parallel processing
-        chunk_size = len(self.representatives) // (n_workers) + 1
+        chunk_size = len(self.representatives) // (n_workers * n_batches) + 1
         
-        with ProcessPoolExecutor(max_workers=n_workers, mp_context=mp.get_context('fork')) as executor:
+        with ProcessPoolExecutor(max_workers=n_workers, mp_context=mp.get_context('spawn'), max_tasks_per_child=1) as executor:
             # Submit chunks
             futures = []
             chunk = []
@@ -189,7 +191,7 @@ class SpinConfiguration:
             start_ind = 0
             end_ind = chunk_size
 
-            for _ in range(n_workers - 1):
+            for _ in range(n_workers * n_batches - 1):
                 futures.append(executor.submit(self._process_hamiltonian_batch, (start_ind, end_ind)))
                 start_ind += chunk_size
                 end_ind += chunk_size
@@ -471,10 +473,10 @@ class SpinConfiguration:
 
 if __name__ == "__main__":
 
-    N = 32
+    N = 26
     num = 'A'
     
-    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)+0, lowest_eignstates=10, n_workers=None,
+    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)+0, lowest_eignstates=1, n_workers=None,
                         delta=1., lamb=1., k=np.array([0., 0.]), print_data=True, force_ham_gen=True, eigva_ve_only=False, save_ham=True)
     min_e, gs_state = sc.get_ground_state()
     
