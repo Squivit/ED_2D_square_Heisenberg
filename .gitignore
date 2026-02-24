@@ -1,5 +1,6 @@
 *.txt
 *.npz
+*.pyc
 /big_N/bash_files/
 /big_N/ham_csr/
 /big_N/eign/
