@@ -164,8 +164,6 @@ class SpinConfiguration:
         e0 = 2. * self.n * self.delta / 4.
         self.e0 = e0
 
-        spin_confg_items = list(self.representatives.items())
-
         easy_ks = [0., 2.]
         
         if easy_ks.__contains__(k[0]) and easy_ks.__contains__(k[1]):
@@ -182,20 +180,21 @@ class SpinConfiguration:
         # Split work into chunks for parallel processing
         chunk_size = len(self.representatives) // (n_workers) + 1
         
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        with ProcessPoolExecutor(max_workers=n_workers, mp_context=mp.get_context('fork')) as executor:
             # Submit chunks
             futures = []
             chunk = []
-            for repr, state in tqdm(spin_confg_items, mininterval=5., disable = not self.print):
-                chunk.append((repr, state))
-                
-                if len(chunk) >= chunk_size:
-                    futures.append(executor.submit(self._process_hamiltonian_batch, chunk.copy()))
-                    chunk.clear()
-            
-            if len(chunk) > 0:
-                futures.append(executor.submit(self._process_hamiltonian_batch, chunk.copy()))
-                chunk.clear()
+
+            start_ind = 0
+            end_ind = chunk_size
+
+            for _ in range(n_workers - 1):
+                futures.append(executor.submit(self._process_hamiltonian_batch, (start_ind, end_ind)))
+                start_ind += chunk_size
+                end_ind += chunk_size
+
+            futures.append(executor.submit(self._process_hamiltonian_batch, (start_ind, None)))
+            chunk.clear()
 
             for future in tqdm(as_completed(futures), total = len(futures), disable = not self.print):
                 batch_results = future.result()
@@ -212,8 +211,11 @@ class SpinConfiguration:
             self.save_hamiltonian()
 
     
-    def _process_hamiltonian_batch(self, representatives):
+    def _process_hamiltonian_batch(self, params):
         """Process a batch of states for hamiltonian calculation."""
+
+        start_ind, end_ind = params
+
         results = []
         
         map_int_to_basis = self.map_int_to_basis
@@ -233,9 +235,12 @@ class SpinConfiguration:
         k = self.k
         is_easy_k = easy_ks.__contains__(k[0]) and easy_ks.__contains__(k[1])
         
-        for repr, state in representatives:
+        for _state, repr in enumerate(self.representatives[start_ind : end_ind]):
             config = map_int_to_config(repr)
             self_energy = self.e0
+            state = _state + start_ind
+
+            repr_norm = self.norms[state]
             
             flipped_states_elements.clear()
             
@@ -260,7 +265,7 @@ class SpinConfiguration:
                         if not is_easy_k:
                             phase = np.mean([np.exp( -1j * np.pi * np.dot(k, t) ) for t in trans])
                         
-                        element = 0.5 * phase * np.sqrt(self.norms[repr]/self.norms[repr_b])
+                        element = 0.5 * phase * np.sqrt(repr_norm/self.norms[basis_index])
                         
                         flipped_states_elements[basis_index] += element
                     
@@ -361,98 +366,6 @@ class SpinConfiguration:
         if self.load_representatives():
            return
 
-        if n_workers is None:
-            n_workers = mp.cpu_count()
-        
-        # Split work into chunks for parallel processing
-        chunk_size = self.size // n_workers + 1
-
-        # Initialize results storage
-        self.representatives = []
-        self.norms = {}
-        
-        # Process in parallel
-        if self.print:
-            print(f"Processing {self.size} states with {n_workers} workers...")
-        
-        def bitmask(combo):
-            """Generate bitmasks efficiently."""
-            val = 0
-            for i in combo:
-                val |= 1 << (self.n - 1 - i)
-            return val
-
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
-            # Submit chunks
-            futures = []
-            chunk = []
-            for combo in tqdm(combinations(range(self.n), self.magnon_number), total = self.size, mininterval=5., disable = not self.print):
-                chunk.append(bitmask(combo))
-                
-                if len(chunk) >= chunk_size:
-                    futures.append(executor.submit(self._process_state_batch, chunk.copy()))
-                    chunk.clear()
-            
-            if len(chunk) > 0:
-                futures.append(executor.submit(self._process_state_batch, chunk.copy()))
-                chunk.clear()
-            
-            # Collect results
-            for future in as_completed(futures):
-                batch_results = future.result()
-                self._merge_results(batch_results)
-        
-        self.representatives.reverse()
-
-        # Create final representative enumeration
-        self.representatives = {r: i for i, r in enumerate(self.representatives)}
-        
-        if self.print:
-            print(f'Total representatives found: {len(self.representatives)}')
-            print(f'Matrix reduction: {round(self.size/len(self.representatives), 1)}:1')
-
-        self.save_representatives()
-
-       #raise TimeoutError
-
-    
-    def _process_state_batch(self, states):
-        """Process a batch of states."""
-        results = []
-        
-        for state_int in states:
-            # Convert to config using the proper mapping
-            state_cfg = self.map_int_to_config(state_int).ravel()
-            
-            set_states = set()
-            is_representative = True
-            
-            for w, _ in self.weight_matrices:
-                rolled_state_int = int(w @ state_cfg)
-                
-                if rolled_state_int < state_int:
-                    is_representative = False
-                    break
-                
-                set_states.add(rolled_state_int)
-            
-            if is_representative:
-                results.append({
-                    'state': state_int,
-                    'norm': len(set_states),
-                })
-            
-        return results
-    
-    def _merge_results(self, batch_results):
-        """Merge results from a batch into main storage."""
-        for result in batch_results:
-            state = result['state']
-            norm = result['norm']
-            
-            self.representatives.append(state)
-            self.norms[state] = norm
-    
     
     def roll_to_repr(self, state_int : int):
 
@@ -503,38 +416,37 @@ class SpinConfiguration:
     
     def load_representatives(self):
         try:
-            self.representatives = np.loadtxt(fr'{REPR_PATH}/{self.key}_Sz={abs(int(self.n/2) - self.magnon_number)}.txt')
-            self.representatives = np.array(self.representatives, dtype = np.int64)
-            self.representatives = {r: i for i, r in enumerate(self.representatives)}
+            npy_repr_fname = fr'{REPR_PATH}/{self.key}_Sz={abs(int(self.n/2) - self.magnon_number)}.npy'
 
-            self.norms = np.loadtxt(fr'{REPR_PATH}/{self.key}_norms_Sz={abs(int(self.n/2) - self.magnon_number)}.txt')
-            keys = np.loadtxt(fr'{REPR_PATH}/{self.key}_norm_keys_Sz={abs(int(self.n/2) - self.magnon_number)}.txt')
-            self.norms = {np.int64(r): float(n) for r, n in zip(keys, self.norms)}
-            keys = None
+            try:
+                self.representatives = np.load(npy_repr_fname, mmap_mode='r')
+            except:
+                representatives = np.loadtxt(fr'{REPR_PATH}/{self.key}_Sz={abs(int(self.n/2) - self.magnon_number)}.txt')
+                representatives = np.array(representatives, dtype = int)
+                np.save(npy_repr_fname, representatives)
+                representatives = None
+
+                self.representatives = np.load(npy_repr_fname, mmap_mode='r')
+
+            npy_norms_name = fr'{REPR_PATH}/{self.key}_norms_Sz={abs(int(self.n/2) - self.magnon_number)}.npy'
+
+            try:
+                self.norms = np.load(npy_norms_name, mmap_mode='r')
+            except:
+                norms : np.ndarray = np.loadtxt(fr'{REPR_PATH}/{self.key}_norms_Sz={abs(int(self.n/2) - self.magnon_number)}.txt')
+                norms = np.array(norms, dtype = np.int16)
+                np.save(npy_norms_name, norms)
+                norms = None
+
+                self.norms = np.load(npy_norms_name, mmap_mode='r')
 
             if self.print:
                 print('Representatives loaded successfully')
+
             return True
         except:
             return False
     
-    def save_representatives(self):
-        try:
-            os.makedirs(f'{REPR_PATH}', exist_ok=False)
-        except:
-            pass
-
-        try:
-            np.savetxt(fr'{REPR_PATH}/{self.key}_Sz={abs(int(self.n/2) - self.magnon_number)}.txt', np.array(list(self.representatives.keys()), dtype = int))
-            a = list(self.norms.values())
-            a.reverse()
-            np.savetxt(fr'{REPR_PATH}/{self.key}_norms_Sz={abs(int(self.n/2) - self.magnon_number)}.txt', a)
-            a = list(self.norms.keys())
-            a.reverse()
-            np.savetxt(fr'{REPR_PATH}/{self.key}_norm_keys_Sz={abs(int(self.n/2) - self.magnon_number)}.txt', a)
-        except:
-            pass
-
     def map_int_to_config(self, n):
         """Map integer to configuration."""
         return self.cluster.bosons_to_cluster(
@@ -549,7 +461,7 @@ class SpinConfiguration:
     
     def map_int_to_basis(self, n):
         """Map integer to basis index."""
-        return self.representatives[n]
+        return np.searchsorted(self.representatives, n)
     
     def map_config_to_int(self, config):
         """Map configuration to integer."""
@@ -558,16 +470,16 @@ class SpinConfiguration:
     def map_config_to_basis(self, config):
         """Map configuration to basis index."""
         idx = self.map_config_to_int(config)
-        return self.representatives[idx]
+        return self.map_int_to_basis(idx)
 
 
 if __name__ == "__main__":
 
-    N = 18
+    N = 32
     num = 'A'
     
     sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)+0, lowest_eignstates=10, n_workers=None,
-                        delta=1., lamb=1., k=np.array([0., 0.]), print_data=True, force_ham_gen=True, eigva_ve_only=False, save_ham=False)
+                        delta=1., lamb=1., k=np.array([0., 0.]), print_data=True, force_ham_gen=True, eigva_ve_only=False, save_ham=True)
     min_e, gs_state = sc.get_ground_state()
         
     print(f'Ground state energy E_0/J = {round(min_e, 5)}')
