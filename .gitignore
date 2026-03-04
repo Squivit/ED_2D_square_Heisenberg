@@ -6,6 +6,9 @@
 /big_N/eign/
 /big_N/repr/
 data/
+datalogs/
 old/
 __pycache__/
 plots/
+Spin_1/plots/
+MF/
