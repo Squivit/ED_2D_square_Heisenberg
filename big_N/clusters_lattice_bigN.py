@@ -45,9 +45,9 @@ class SpinConfiguration:
         else:
             self.magnon_number = magnon_number
 
-        self.delta = delta
+        self.delta = float(delta)
         self.k = k
-        self.lamb = lamb
+        self.lamb = float(lamb)
         
         # side lenghts optimized for 18A, 24A and 32A
         side = 18
@@ -130,15 +130,15 @@ class SpinConfiguration:
 
 
         # check if there is a hamiltonian with D=1, l=1
-        elif hamilonians.__contains__(f'{self.key}_k={k}_d=1.0_l=1.0_Sz={abs(int(self.n/2) - self.magnon_number)}.npz'):
+        #elif hamilonians.__contains__(f'{self.key}_k={k}_d=1.0_l=1.0_Sz={abs(int(self.n/2) - self.magnon_number)}.npz'):
 
-            from clusters_param_change import Parameter_Changer
-            pc = Parameter_Changer(key=self.key, magnon_number=self.magnon_number)
-            ham_1_1 = load_npz(fr'{HAMILTONIAN_PATH}/{self.key}_k={k}_d=1.0_l=1.0_Sz={abs(int(self.n/2) - self.magnon_number)}.npz')
-            self.hamiltonian = pc.change_parameters(ham_1_1, self.delta, self.lamb, _print=self.print)
+        #    from clusters_param_change import Parameter_Changer
+        #    pc = Parameter_Changer(key=self.key, magnon_number=self.magnon_number)
+        #    ham_1_1 = load_npz(fr'{HAMILTONIAN_PATH}/{self.key}_k={k}_d=1.0_l=1.0_Sz={abs(int(self.n/2) - self.magnon_number)}.npz')
+        #    self.hamiltonian = pc.change_parameters(ham_1_1, self.delta, self.lamb, _print=self.print)
 
-            if self.print:
-                print('Hamiltonian loaded and parameters changed successfully.')
+        #    if self.print:
+        #        print('Hamiltonian loaded and parameters changed successfully.')
 
 
         # no hamiltonian, create and save one
@@ -339,11 +339,13 @@ class SpinConfiguration:
             self.eign_en = energies
             self.eignstates = states
 
-            self.save_eign_eigva()
+            if self.n > 22:
+                self.save_eign_eigva()
 
             return energies, states
         
-        self.save_eign_eigva()
+        if self.n > 22:
+            self.save_eign_eigva()
 
     def get_ground_state(self):
         return self.gs_energy, self.gs_in_basis
@@ -563,11 +565,11 @@ class SpinConfiguration:
 
 if __name__ == "__main__":
 
-    N = 26
+    N = 28
     num = 'A'
     
     sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)+0, lowest_eignstates=10, n_workers=None,
-                        delta=1., lamb=1., k=np.array([0., 0.]), print_data=True, force_ham_gen=True, eigva_ve_only=False, save_ham=False)
+                        delta=1., lamb=0., k=np.array([0., 0.]), print_data=True, force_ham_gen=False, eigva_ve_only=False, save_ham=True)
     min_e, gs_state = sc.get_ground_state()
         
     print(f'Ground state energy E_0/J = {round(min_e, 5)}')

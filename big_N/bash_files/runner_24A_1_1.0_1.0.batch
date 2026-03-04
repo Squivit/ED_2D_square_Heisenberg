@@ -1,18 +1,15 @@
 #!/bin/bash -l
-#SBATCH --job-name="24-10-10"
+#SBATCH --job-name="24-f50"
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=5000
-#SBATCH --time=0:30:00
+#SBATCH --time=0:10:00
 #SBATCH --account=G103-2489
 #SBATCH --partition=topola
-#SBATCH --output="results_24-1.0-1.0.out"
+#SBATCH --output="results_24-frag50.out"
 
 source ./py_venv/bin/activate
-python3 generate_ham.py 24A 1 1.0 1.0 0.0 0.0
-python3 generate_ham.py 24A 1 1.0 1.0 0.5 0.0
-python3 generate_ham.py 24A 1 1.0 1.0 1.0 0.0
-python3 generate_ham.py 24A 1 1.0 1.0 1.0 1.0
-python3 generate_ham.py 24A 1 1.0 1.0 0.6666666666666666 0.6666666666666666
-python3 generate_ham.py 24A 1 1.0 1.0 0.3333333333333333 0.3333333333333333
+python3 generate_ham.py 24A 0 1.0 1.0 0.0 0.0
+python3 generate_ham.py 24A 0 1.0 1.0 0.5 0.0
+python3 generate_ham.py 24A 0 1.0 1.0 1.0 0.0

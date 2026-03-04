@@ -474,7 +474,7 @@ class SpinConfiguration:
 
 if __name__ == "__main__":
 
-    N = 32
+    N = 26
     num = 'A'
     
     sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)+0, lowest_eignstates=10, n_workers=None,
