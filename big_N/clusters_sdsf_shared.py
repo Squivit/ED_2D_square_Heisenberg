@@ -11,7 +11,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 
 from tqdm import tqdm
 from paths import *
-from clusters_lattice_bigN import SpinConfiguration
+from clusters_lattice_bigN_fragmented import SpinConfiguration
 
 class SpinCorrelatorMachine:
     
@@ -37,6 +37,34 @@ class SpinCorrelatorMachine:
         
         self.print_data = print_data
     
+    def load_en_vecs(self, k = np.array([0., 0.]), Sz = 1, gs = True):
+        fname_npy = fr'{EIGN_PATH}/npy/{self.key}_k={k}_d={self.delta}_l={self.lamb}_Sz={Sz}'
+        fname = fr'{EIGN_PATH}/{self.key}_k={k}_d={self.delta}_l={self.lamb}_Sz={Sz}'
+
+        try:
+            if gs:
+                self.gs_en = np.load(f'{fname_npy}_en.npy', mmap_mode='r')[0]
+                self.gs_state = np.load(f'{fname_npy}_vec.npy', mmap_mode='r')[:, 0]
+            else:
+                #print(f'{fname_npy}_en.npy')
+                self.energy = np.load(f'{fname_npy}_en.npy', mmap_mode='r')
+                self.states = np.load(f'{fname_npy}_vec.npy', mmap_mode='r')
+        except:
+            energy = np.loadtxt(f'{fname}_en.txt')
+            states = np.loadtxt(f'{fname}_vec.txt', dtype=np.complex64)
+
+            np.save(f'{fname_npy}_en.npy', energy)
+            np.save(f'{fname_npy}_vec.npy', states)
+            energy = None
+            states = None
+
+            if gs:
+                self.gs_en = np.load(f'{fname_npy}_en.npy', mmap_mode='r')[0]
+                self.gs_state = np.load(f'{fname_npy}_vec.npy', mmap_mode='r')[:, 0]
+            else:
+                self.energy = np.load(f'{fname_npy}_en.npy', mmap_mode='r')
+                self.states = np.load(f'{fname_npy}_vec.npy', mmap_mode='r')
+        
         
     def get_SDSF_zz(self, get_n_lowest = 150, print_en_diff = False):
         
@@ -45,13 +73,7 @@ class SpinCorrelatorMachine:
         # energy differences from GS
         points_en = np.zeros( (get_n_lowest, len(self.k_points)) )
 
-        fname = fr'{EIGN_PATH}/{self.key}_k={np.array([0., 0.])}_d={self.delta}_l={self.lamb}_Sz={0}'
-
-        gs_en = np.loadtxt(f'{fname}_en.txt')[0]
-        gs_state = np.loadtxt(f'{fname}_vec.txt')[:, 0]
-
-        self.gs_en = gs_en
-        self.gs_state = gs_state
+        self.load_en_vecs(Sz=0, gs = True)
 
         self.sc = SpinConfiguration(key=key, helper_mode=True)
         
@@ -59,15 +81,9 @@ class SpinCorrelatorMachine:
             if self.print_data:
                 print(f'Calculating SDSF for k = {k}')
             
-            if not (k[0] == 0 and k[1] == 0):
-                fname = fr'{EIGN_PATH}/{self.key}_k={k}_d={self.delta}_l={self.lamb}_Sz={0}'
+            self.load_en_vecs(k = k, Sz=0, gs = False)
 
-            energy = np.loadtxt(f'{fname}_en.txt')
-            states = np.loadtxt(f'{fname}_vec.txt')
-            
-            non_gs_states : np.ndarray = states
-
-            dEnergy = energy - self.gs_en
+            dEnergy = self.energy - self.gs_en
             
             if print_en_diff and self.print_data:
                 print(f'Highest energy difference: {round(dEnergy[-1], 5)}J')
@@ -82,23 +98,25 @@ class SpinCorrelatorMachine:
             
             n_workers = mp.cpu_count()
 
+            len_states = len(self.sc.representatives)
+
             # Split work into chunks for parallel processing
-            chunk_size = np.ceil(len(self.sc.representatives) / n_workers)
+            fragment_size = len_states // (n_workers) + 1
+
+            start_ind = -fragment_size
+            end_ind = 0
             
             with ProcessPoolExecutor(max_workers=n_workers) as executor:
-                # Submit chunks
                 futures = []
-                chunk = []
-                for repr, ii in self.sc.representatives.items():
-                    chunk.append((repr, ii))
+
+                for _ in range(n_workers):
+                    start_ind += fragment_size
+                    end_ind += fragment_size
                     
-                    if len(chunk) >= chunk_size:
-                        futures.append(executor.submit(self._process_sz_batch, chunk.copy()))
-                        chunk.clear()
-                
-                if len(chunk) > 0:
-                    futures.append(executor.submit(self._process_sz_batch, chunk.copy()))
-                    chunk.clear()
+                    if end_ind > len_states:
+                        end_ind = None
+
+                    futures.append(executor.submit(self._process_sz_batch, (start_ind, end_ind)))
 
                 for future in tqdm(as_completed(futures), total=len(futures), disable = not self.print_data):
                     batch_results = future.result()
@@ -106,8 +124,8 @@ class SpinCorrelatorMachine:
             
             Szk_gs = self.S_z_k_mapped * self.gs_state
 
-            for ii in range(non_gs_states.shape[1]):
-                overlap : np.complex64 = np.dot( np.conj(non_gs_states[:, ii]), Szk_gs )
+            for ii in range(self.states.shape[1]):
+                overlap : np.complex64 = np.dot( np.conj(self.states[:, ii]), Szk_gs )
                 ov_mag_sq = np.abs(overlap)**2
                 
                 points_mag[ii, ik] = ov_mag_sq
@@ -115,16 +133,19 @@ class SpinCorrelatorMachine:
         
         return points_mag, points_en
     
-    def _process_sz_batch(self, representatives):
+    def _process_sz_batch(self, params):
         """Process a batch of states for hamiltonian calculation."""
-        results = []
+        results_basis = []
+        results_coeff = []
+
         norm = 1. / np.sqrt(float(self.n))
+
+        start_ind, end_ind = params
         
-        for repr, ii in representatives:
+        for ii, repr in enumerate(self.sc.representatives[start_ind:end_ind]):
             Szk_amp = 0
             
             _, translations = self.sc.roll_to_repr(repr)
-            #_, translations = self.sc.get_representative[repr]
             
             repr_config = self.sc.map_int_to_config_extended(repr) - .5
             
@@ -134,23 +155,20 @@ class SpinCorrelatorMachine:
                 
             Szk_amp /= len(translations)
 
-            results.append({
-                'basis': ii,
-                'coeff': Szk_amp * norm,
-            })
-            
-        return results
+            results_basis.append(ii)
+            results_coeff.append(Szk_amp * norm)
+
+        return (results_basis, results_coeff)
     
     def _merge_sz_results(self, batch_results):
         """Merge results from a batch into main storage."""
-        for result in batch_results:
-            ii = result['basis']
-            coeff = result['coeff']
-            
+        res_basis, res_coeff = batch_results
+
+        for ii, coeff in zip(res_basis, res_coeff):
             self.S_z_k_mapped[ii] = coeff
 
 
-    def get_SDSF_minus(self, get_n_lowest = 50, print_en_diff = False):
+    def get_SDSF_minus(self, get_n_lowest = 5, print_en_diff = False):
         
         # magnitudes
         points_mag = np.zeros( (get_n_lowest, len(self.k_points)) )
@@ -163,13 +181,7 @@ class SpinCorrelatorMachine:
         if self.print_data:
             print('Loading ground state energy and vector')
 
-        fname = fr'{EIGN_PATH}/{self.key}_k={np.array([0., 0.])}_d={self.delta}_l={self.lamb}_Sz={0}'
-
-        gs_en = np.loadtxt(f'{fname}_en.txt')[0]
-        gs_state = np.loadtxt(f'{fname}_vec.txt', dtype=np.complex64)[:, 0]
-
-        self.gs_en = gs_en
-        self.gs_state = gs_state
+        self.load_en_vecs(Sz=0, gs = True)
         
         for ik, k in enumerate(self.k_points):
             if self.print_data:
@@ -183,14 +195,9 @@ class SpinCorrelatorMachine:
             if self.print_data:
                 print('Loading eigenstates and eigenenergies')
 
-            fname = fr'{EIGN_PATH}/{self.key}_k={k}_d={self.delta}_l={self.lamb}_Sz={1}'
+            self.load_en_vecs(k = k, Sz=1, gs=False)
 
-            energy = np.loadtxt(f'{fname}_en.txt')
-            states = np.loadtxt(f'{fname}_vec.txt', dtype=np.complex64)
-
-            non_gs_states : np.ndarray = states
-
-            dEnergy = energy - self.gs_en
+            dEnergy = self.energy - self.gs_en
             
             if print_en_diff and self.print_data:
                 print(f'Highest energy difference: {round(dEnergy[-1], 5)}J')
@@ -204,52 +211,73 @@ class SpinCorrelatorMachine:
             self.S_minus_k_mapped_gs = np.zeros(len(self.sc_minus_helper.representatives), dtype=np.complex64)
             
             n_workers = mp.cpu_count()
+            #n_workers = 1
+
+            len_states = len(self.sc.representatives)
+
             # Split work into chunks for parallel processing
-            chunk_size = len(self.sc.representatives) // n_workers + 1
+            fragment_size = len_states // (n_workers) + 1
+
+            start_ind = -fragment_size
+            end_ind = 0
+            
+            print('Starting calculations')
             
             with ProcessPoolExecutor(max_workers=n_workers) as executor:
-                # Submit chunks
                 futures = []
-                chunk = []
-                for repr, ii in tqdm(self.sc.representatives.items(), total=len(self.sc.representatives), disable = not self.print_data):
-                    chunk.append((repr, self.gs_state[ii]))
-                    
-                    if len(chunk) >= chunk_size:
-                        futures.append(executor.submit(self._process_sminus_batch, chunk.copy()))
-                        chunk.clear()
-                
-                if len(chunk) > 0:
-                    futures.append(executor.submit(self._process_sminus_batch, chunk.copy()))
-                    chunk.clear()
 
-                for future in tqdm(as_completed(futures), total=len(futures), disable = not self.print_data):
+                for _ in tqdm(range(n_workers), disable = not self.print_data):
+                    start_ind += fragment_size
+                    end_ind += fragment_size
+                    
+                    if end_ind > len_states:
+                        end_ind = None
+
+                    futures.append(executor.submit(self._process_splus_batch, (start_ind, end_ind)))
+
+                for future in tqdm(as_completed(futures), total=len(futures), disable = not self.print_data, smoothing=0.):
                     batch_results = future.result()
-                    self._merge_sminus_results(batch_results)
+                    self._merge_splus_results(batch_results)
+            
+
+            #result = self._process_splus_batch((0, None))
+            #self._merge_splus_results(result)
                         
-            for ii in range(non_gs_states.shape[1]):
-                overlap : np.complex64 = np.dot( np.conj(non_gs_states[:, ii]), self.S_minus_k_mapped_gs )
+            for ii in range(self.states.shape[1]):
+                overlap : np.complex64 = np.dot( np.conj(self.states[:, ii]), self.S_minus_k_mapped_gs )
                 ov_mag_sq = np.abs(overlap)**2
                 
                 points_mag[ii, ik] = ov_mag_sq
                 points_en[ii, ik] = dEnergy[ii]
+            
+            print(points_en)
+            print(points_mag)
         
         return points_mag, points_en
 
-    def _process_sminus_batch(self, representatives):
+    def _process_splus_batch(self, params):
         """Process a batch of states."""
-        results = []
+
+        results_coeff = np.zeros(len(self.sc_minus_helper.representatives), dtype=np.complex64)
+
         norm = 1. / np.sqrt(float(self.n))
 
-        for repr, coeff in representatives:
+        start_ind, end_ind = params
+        
+        for repr, coeff in zip(self.sc.representatives[start_ind:end_ind], self.gs_state[start_ind:end_ind]):
+        #for repr, coeff in tqdm(zip(self.sc.representatives[start_ind:end_ind], self.gs_state[start_ind:end_ind]), total = len(self.sc.representatives[start_ind:end_ind])):
             config = self.sc.map_int_to_config(repr)
+            state = self.sc.map_int_to_basis(repr)
             
             int_shifts = self.sc.weight_matrix * self.sc.cluster.cluster_map * (1 - config)
             
-            for x, y in zip(*np.where(int_shifts != 0)):
+            for x, y in zip(*int_shifts.nonzero()):
                 state_flipped = repr + int_shifts[x, y]
+                a = config
+                a[x, y] += 1
                 repr_f, translations = self.sc_minus_helper.roll_to_repr(state_flipped)
                 
-                ind = self.sc_minus_helper.representatives[repr_f]
+                ind = self.sc_minus_helper.map_int_to_basis(repr_f)
 
                 phase = self.phase_map[x, y]
 
@@ -261,22 +289,16 @@ class SpinCorrelatorMachine:
                 
                 phase_r_2 /= len(translations)
                         
-                norm_k = np.sqrt( self.sc.norms[repr] / self.sc_minus_helper.norms[repr_f] )
+                norm_k = np.sqrt( self.sc.norms[state] / self.sc_minus_helper.norms[ind] )
 
-                results.append({
-                    'basis': ind,
-                    'coeff': coeff * phase * phase_r_2 * norm * norm_k,
-                })
+                results_coeff[ind] = coeff * phase * phase_r_2 * norm * norm_k
             
-        return results
+        return results_coeff
     
-    def _merge_sminus_results(self, batch_results):
+    def _merge_splus_results(self, batch_results):
         """Merge results from a batch into main storage."""
-        for result in batch_results:
-            ind = result['basis']
-            coeff = result['coeff']
-            
-            self.S_minus_k_mapped_gs[ind] += coeff
+        
+        self.S_minus_k_mapped_gs += batch_results
 
 
 def get_SDSF(scm = None, key = '16B', lamb = 1, delta = 1, dir = '+-', plot = False, print_data = False, save = True):

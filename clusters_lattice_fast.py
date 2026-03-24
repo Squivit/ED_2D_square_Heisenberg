@@ -379,16 +379,19 @@ if __name__ == "__main__":
     
     N = 24
     num = 'A'
+
+    delta = 1.
+    lamb = 0.
     
     sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2), k=np.array([0., 0.]),
-                            lowest_eignstates=10, delta=1., lamb=1., print_data=False)
+                            lowest_eignstates=1, delta=delta, lamb=lamb, print_data=True)
     min_e, gs_state = sc.get_ground_state()
 
     print(f'Ground state energy E_0/J = {round(min_e, 5)}')
     print(f'GS energy per-site: e_0/J = {round(min_e/(N), 5)}')
 
-    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)-1, k=np.array([0., 0.]),
-                            lowest_eignstates=10, delta=1., lamb=1., print_data=False)
+    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)+1, k=np.array([0., 0.]),
+                            lowest_eignstates=1, delta=delta, lamb=lamb, print_data=True)
     min_e_1, gs_state = sc.get_ground_state()
 
     print(f'Ground state energy E_0/J = {round(min_e_1, 5)}')

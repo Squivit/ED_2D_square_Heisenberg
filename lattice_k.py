@@ -305,11 +305,11 @@ class SpinConfiguration:
 
 
 if __name__ == "__main__":
-    nx = 6
+    nx = 4
     ny = 4
     n = nx*ny
     
-    sc = SpinConfiguration(nx, ny, int(n/2), lowest_eignstates=1, delta=1., lamb=1., print_data=True)
+    sc = SpinConfiguration(nx, ny, int(n/2), lowest_eignstates=1, delta=1., lamb=0., print_data=True)
     min_e, gs_state = sc.get_ground_state()
 
     print(f'Ground state energy E_0/J = {round(min_e, 7)}')

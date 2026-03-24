@@ -245,7 +245,7 @@ class Representation():
 
 
 if __name__ == '__main__':
-    nx = 6
+    nx = 4
     ny = 4
 
     k_max = 0

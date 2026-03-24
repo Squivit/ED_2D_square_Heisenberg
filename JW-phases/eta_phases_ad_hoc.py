@@ -8,10 +8,11 @@ from itertools import combinations
 
 class Representation():
 
-    def __init__(self, n_x = 4, n_y = 4, magnon_number = -1, k_max = 6):
+    def __init__(self, n_x = 4, n_y = 4, magnon_number = -1, k_max = 6, _print = False):
         self.n_y = n_y
         self.n_x = n_x
         self.n = n_x * n_y
+        self._print = _print
         
         if magnon_number == -1:
             self.magnon_number = int(self.n/2)
@@ -40,9 +41,15 @@ class Representation():
 
         self.index_map = map_index
 
-        self.coords_per_id = [ (int(n_y/2)-1, int(n_x/2)-1), (int(n_y/2)-1, int(n_x/2)),
-                          (int(n_y/2), int(n_x/2)-1), (int(n_y/2), int(n_x/2)) ]
-        
+        #self.coords_per_id = [ (int(n_y/2)-1, int(n_x/2)-1), (int(n_y/2)-1, int(n_x/2)),
+        #                  (int(n_y/2), int(n_x/2)-1), (int(n_y/2), int(n_x/2)) ]
+
+        x0 = int(n_x * (k + 1/2))
+        y0 = int(n_y * (k_y + 1/2))
+
+        self.coords_per_id = [ (y0-1, x0-1), (y0-1, x0),
+                          (y0, x0-1), (y0, x0) ]
+
         def _generate_bitmasks():
             """Generate bitmasks efficiently."""
             for combo in combinations(range(self.n), self.magnon_number):
@@ -102,7 +109,8 @@ class Representation():
         self.get_representative = {}
         
         # Process in parallel
-        print(f"Processing {self.size} states with {n_workers} workers...")
+        if self._print:
+            print(f"Processing {self.size} states with {n_workers} workers...")
         
         with ProcessPoolExecutor(max_workers=n_workers) as executor:
             # Submit chunks
@@ -112,7 +120,7 @@ class Representation():
                 futures.append(executor.submit(self._process_state_batch, chunk))
             
             # Collect results with progress bar
-            for future in tqdm(as_completed(futures), total=len(futures)):
+            for future in tqdm(as_completed(futures), total=len(futures), disable= not self._print):
                 batch_results = future.result()
                 self._merge_results(batch_results)
         
@@ -122,9 +130,10 @@ class Representation():
         # Create final representative enumeration
         self.representatives = {r: i for i, r in enumerate(self.representatives)}
         
-        print(f'Total number of found representatives: {len(self.representatives)}')
-        print(f'Percent of repr in total states: {round(100*len(self.representatives)/self.size, 2)}%')
-        print(f'Estimated matrix reduction: {round(self.size/len(self.representatives), 1)}:1')
+        if self._print:
+            print(f'Total number of found representatives: {len(self.representatives)}')
+            print(f'Percent of repr in total states: {round(100*len(self.representatives)/self.size, 2)}%')
+            print(f'Estimated matrix reduction: {round(self.size/len(self.representatives), 1)}:1')
     
     def _generate_bitmasks(self):
         """Generate bitmasks efficiently."""
@@ -239,7 +248,7 @@ class Representation():
 
             phase = np.sum(phase_maps[id] * config_extended)
 
-            return np.mod(phase, 2 * np.pi)
+            return phase
 
         # Precompute mappings
         spin_confg_items = list(self.representatives.items())
@@ -256,7 +265,7 @@ class Representation():
 
         eta_phases = []
 
-        for config_int, state in tqdm(spin_confg_items):
+        for config_int, state in tqdm(spin_confg_items, disable= not self._print):
             config = map_int_to_config(config_int)
             
             for id, dir in enumerate(directions):
@@ -312,14 +321,21 @@ class Representation():
                         
                         # calculates theta_ri + theta_rj = theta_ir + theta_jr + 2pi, which we remove with taking mod 2pi everything
                         # again, sign for conjugate
-                        eta_phases.append( sign * np.mod( -thetas[id] + extended_phase(rot_xy, index) + extended_phase(roll_rot_xy, index), 2 * np.pi))
+                        #eta_phases.append( sign * np.mod( -thetas[id] + extended_phase(rot_xy, index) + extended_phase(roll_rot_xy, index), 2 * np.pi))
+                        eta_phases.append( sign * ( -thetas[id] + extended_phase(rot_xy, index) + extended_phase(roll_rot_xy, index) + 2*np.pi))
 
-        print(len(eta_phases))
-        np.savetxt(fr'JW-phases/eta_phases_{n_x}x{n_y}_Sz={int(n_x*n_y/2-self.magnon_number)}.txt', eta_phases)
+        if self._print:
+            print(len(eta_phases))
+        self.phases = eta_phases
+        
+        try:
+            np.savetxt(fr'JW-phases/eta_phases_{n_x}x{n_y}_Sz={int(n_x*n_y/2-self.magnon_number)}.txt', eta_phases)
+        except:
+            np.savetxt(fr'eta_phases_{n_x}x{n_y}_Sz={int(n_x*n_y/2-self.magnon_number)}.txt', eta_phases)
 
 
 if __name__ == '__main__':
-    nx = 6
+    nx = 4
     ny = 4
 
     k_max = 0

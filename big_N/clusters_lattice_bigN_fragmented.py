@@ -380,7 +380,7 @@ class SpinConfiguration:
         repr_size = len(self.representatives)
         self.hamiltonian = csr_matrix((array([], dtype=self.d_type), (array([], dtype=int), array([], dtype=int))), shape=(repr_size, repr_size))
 
-        n_fragments = 1
+        n_fragments = 50
 
         # Split work into chunks for parallel processing
         fragment_size = len(self.representatives) // (n_fragments) + 1
@@ -443,24 +443,11 @@ class SpinConfiguration:
         
         #energies, states = eigsh(self.hamiltonian, k=n_lowest, which='SA', ncv = max(2*n_lowest + 1, 60), tol=1e-6)
         energies, states = eigsh(self.hamiltonian, k=n_lowest, which='SA', ncv = n_lowest + 5, tol=1e-3)
-
-        #self.gs_energy = float(np.min(energies))
-        #self.gs_in_basis = states[:, np.argmin(energies)]
+        self.save_eign_eigva(energies, states)
 
         if n_lowest > 1:
-            #self.eign_en = energies
-            #self.eignstates = states
-
-            self.save_eign_eigva()
-
             return energies, states
-        
-        self.save_eign_eigva()
-
-    def get_ground_state(self):
-        return self.gs_energy, self.gs_in_basis
-        
-        
+            
     def get_representations(self, n_workers=None):
         """
         Generates representations of spin states with parallel execution.
@@ -485,7 +472,7 @@ class SpinConfiguration:
         save_npz(fname, self.hamiltonian)
 
 
-    def save_eign_eigva(self):
+    def save_eign_eigva(self, en, vec):
         try:
             os.makedirs(f'{EIGN_PATH}', exist_ok=False)
         except:
@@ -494,10 +481,10 @@ class SpinConfiguration:
 
         try:
             fname = fr'{EIGN_PATH}/{self.key}_k={self.k}_d={self.delta}_l={self.lamb}_Sz={abs(int(self.n/2) - self.magnon_number)}_en.txt'
-            np.savetxt(fname, self.eign_en)
+            np.savetxt(fname, en)
 
             fname = fr'{EIGN_PATH}/{self.key}_k={self.k}_d={self.delta}_l={self.lamb}_Sz={abs(int(self.n/2) - self.magnon_number)}_vec.txt'
-            np.savetxt(fname, self.eignstates)
+            np.savetxt(fname, vec)
         except:
             pass
     
@@ -534,19 +521,70 @@ class SpinConfiguration:
         except:
             return False
     
+    def roll_to_repr(self, state_int : int):
+
+        state_cfg = self.map_int_to_config(state_int).ravel()
+
+        min_int = state_int
+        translations = []
+        
+        for w, trans in self.weight_matrices:
+            rolled_state_int = int(np.dot(w, state_cfg))
+
+            # it is the same representative under this translation
+            if rolled_state_int == min_int:
+                translations.append(trans)
+            # we found a better representative
+            elif rolled_state_int < min_int:
+                min_int = rolled_state_int
+                translations = [trans]
+        
+        return min_int, translations
+
+    def map_int_to_config(self, n):
+        """Map integer to configuration."""
+        return self.cluster.bosons_to_cluster(
+            array([(n >> i) & 1 for i in reversed(range(self.n))], dtype=uint8)
+        )
+    
+    def map_int_to_config_extended(self, n):
+        """Map integer to extended configuration."""
+        return self.cluster.bosons_to_cluster_rolled(
+            array([(n >> i) & 1 for i in reversed(range(self.n))], dtype=uint8)
+        )
+    
+    def map_int_to_basis(self, n):
+        """Map integer to basis index."""
+        return np.searchsorted(self.representatives, n)
+    
+    def map_config_to_int(self, config):
+        """Map configuration to integer."""
+        return int(dot(self.weight_matrix.ravel(), config.ravel()))
+    
+    def map_config_to_basis(self, config):
+        """Map configuration to basis index."""
+        idx = self.map_config_to_int(config)
+        return self.map_int_to_basis(idx)
 
 
 if __name__ == "__main__":
 
-    N = 26
+    N = 28
     num = 'A'
+
+    delta = 1.44
+    lamb = 0.
     
-    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)+0, lowest_eignstates=5, n_workers=None,
-                        delta=1., lamb=0., k=np.array([0., 0.]), print_data=True, force_ham_gen=False, save_ham=True, eigva_ve_only=True)
-    min_e, gs_state = sc.get_ground_state()
-    
-    print(f'Ground state energy E_0/J = {round(min_e, 5)}')
-    print(f'GS energy per-site: e_0/J = {round(min_e/(N), 5)}')
+    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)+0, lowest_eignstates=2, n_workers=None,
+                        delta=delta, lamb=lamb, k=np.array([0., 0.]), print_data=True, force_ham_gen=False, save_ham=True, eigva_ve_only=False)
+    min_e = sc.get_eigva_eigve(2)[0][0]
+
+    sc = SpinConfiguration(N=N, number=num, key=str(N)+num, magnon_number=int(N/2)+1, lowest_eignstates=2, n_workers=None,
+                        delta=delta, lamb=lamb, k=np.array([1., 0.]), print_data=True, force_ham_gen=False, save_ham=True, eigva_ve_only=False)
+    min_e_1 = sc.get_eigva_eigve(2)[0][0]
+
+    print(f'Gap: {round(min_e_1 - min_e, 5)}')
+
     
     #eign = sc.get_eigva_eigve(5)[0]
     #print(np.round(eign, 6))

@@ -336,7 +336,7 @@ if __name__ == "__main__":
             if delta != 0. or lamb != 0.:
                 plt.subplot(len(deltas), len(lambdas), il + 1 + len(lambdas) * id)
                 plot_SDSF(scm, 4, 6, lamb=lamb, delta=delta, dir='+-', marker_s=marker_size, graph_normalized=graph_normalized,
-                          to_diameter=to_diameter, save=True, k_lowest=10)
+                          to_diameter=to_diameter, save=True, k_lowest=20)
     #plot_SDSF(scm, 4, 4, lamb=1., delta=1., dir='zz', marker_s=marker_size, graph_normalized=graph_normalized, to_diameter=to_diameter, save=False)
 
     print(f'Execution time = {round(time() - s_time, 3)} s')

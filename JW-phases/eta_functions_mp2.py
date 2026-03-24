@@ -11,7 +11,7 @@ import multiprocessing as mp
 
 class SpinCorrelatorMachine:
     
-    def __init__(self, _system_size = (2, 2), mag = -1, _delta : float = 1., _lamb : float = 1., _J2overJ1 = 1., ks = [[0, 0], [0, .5]], eta = 1.):
+    def __init__(self, _system_size = (2, 2), mag = -1, _delta : float = 1., _lamb : float = 1., _J2overJ1 = 1., ks = [[0, 0], [0, .5]], eta = 1., _print = False):
         
         self.delta = _delta
         self.lamb = _lamb
@@ -32,9 +32,11 @@ class SpinCorrelatorMachine:
             self.mag = mag
                 
         self.k_points = ks
+        self._print = _print
         
         # for k-vector = (0, 0)
-        self.sc = SpinConfiguration(self.nx, self.ny, magnon_number=self.mag, print_data=False, delta = self.delta, J2overJ1=self.J2, lamb=self.lamb, lowest_eignstates=1, eta = eta)
+        self.sc = SpinConfiguration(self.nx, self.ny, magnon_number=self.mag, delta = self.delta,
+                                    J2overJ1=self.J2, lamb=self.lamb, lowest_eignstates=1, eta = eta, print_data = self._print)
         self.sc_minus_helper = None
     
     
@@ -109,8 +111,10 @@ class SpinCorrelatorMachine:
     def get_SDSF_minus(self, get_n_lowest = 35, print_en_diff = False):
 
         if self.sc_minus_helper is None:
-            print('Calculating Sz=-1 helper...')
-            self.sc_minus_helper = SpinConfiguration(self.nx, self.ny, self.mag - 1, self.delta, self.lamb, self.J2, lowest_eignstates=get_n_lowest, eta = self.eta)
+            if self._print:
+                print('Calculating Sz=-1 helper...')
+            self.sc_minus_helper = SpinConfiguration(self.nx, self.ny, self.mag - 1, self.delta, self.lamb, self.J2, lowest_eignstates=get_n_lowest,
+                                                     eta = self.eta, print_data = self._print)
         else:
             self.sc_minus_helper.delta = self.delta
             self.sc_minus_helper.lamb = self.lamb
@@ -120,8 +124,11 @@ class SpinCorrelatorMachine:
         # energy differences from GS
         self.points_en = np.zeros( (get_n_lowest, len(self.k_points)) )
         
-        self.sc.generate_hamiltonian(lamb=self.lamb, delta=self.delta)
-        self.sc.get_eigva_eigve()
+        n = 1
+        while n > .75:
+            self.sc.generate_hamiltonian(lamb=self.lamb, delta=self.delta)
+            self.sc.get_eigva_eigve()
+            n = self.sc.get_n()
         
         gs_en, gs_state = self.sc.get_ground_state()
         self.gs_en = gs_en
@@ -134,7 +141,7 @@ class SpinCorrelatorMachine:
             for ik, k in enumerate(self.k_points):
                 futures.append(executor.submit(self.get_minus_results, (ik, k, (get_n_lowest, len(self.k_points)), get_n_lowest)))
                         
-            for future in tqdm(as_completed(futures), total = len(futures)):
+            for future in tqdm(as_completed(futures), total = len(futures), disable = not self._print):
                 results = future.result()
                 self.merge_results(results)
         
@@ -148,7 +155,11 @@ class SpinCorrelatorMachine:
         points_en = np.zeros( shape )
         
         if not (k[0] == 0 and k[1] == 0):
-            self.sc_minus_helper.generate_hamiltonian(k=k, lamb=self.lamb, delta=self.delta)
+            n = 1
+            while n > .75:
+                self.sc_minus_helper.generate_hamiltonian(k=k, lamb=self.lamb, delta=self.delta)
+                self.sc_minus_helper.get_eigva_eigve(2)
+                n = self.sc.get_n()
         
         energy, non_gs_states = self.sc_minus_helper.get_eigva_eigve(n_states=n_lowest)
 
@@ -221,7 +232,8 @@ def find_degeneracy(p_mag : np.ndarray, p_en : np.ndarray, limit = 4):
     return p_mag
 
 
-def plot_SDSF(scm = None, nx = 4, ny = 4, lamb = 1, delta = 1, dir = '+-', to_diameter = False, graph_normalized = False, marker_s = 900, k_lowest = 10, save = False, eta = 1.):
+def plot_SDSF(scm = None, nx = 4, ny = 4, lamb = 1, delta = 1, dir = '+-', to_diameter = False, graph_normalized = False,
+              marker_s = 900, k_lowest = 10, save = False, eta = 1., _print = False):
     
     k_points = []
     
@@ -237,10 +249,12 @@ def plot_SDSF(scm = None, nx = 4, ny = 4, lamb = 1, delta = 1, dir = '+-', to_di
     if nx == ny:
         for ky in (k_y[:-1]).__reversed__():
             k_points.append( np.array( [ky, ky] ) )
-    print(k_points)
+    
+    if _print:
+        print(k_points)
         
     if scm is None:
-        scm = SpinCorrelatorMachine((nx, ny), ks=k_points, _lamb = lamb, _delta = delta, eta = eta)
+        scm = SpinCorrelatorMachine((nx, ny), ks=k_points, _lamb = lamb, _delta = delta, eta = eta, _print = _print)
     
     scm.lamb = lamb
     scm.delta = delta
@@ -253,7 +267,7 @@ def plot_SDSF(scm = None, nx = 4, ny = 4, lamb = 1, delta = 1, dir = '+-', to_di
     p_s = find_degeneracy(p_mag=p_s, p_en=p_x, limit = 4)
 
     p_s = np.round(p_s, 9)
-    print('Rounding result to the 1e-9 to reduce numerical inaccuracies')
+    #print('Rounding result to the 1e-9 to reduce numerical inaccuracies')
     
     if save:
         try:
@@ -263,7 +277,8 @@ def plot_SDSF(scm = None, nx = 4, ny = 4, lamb = 1, delta = 1, dir = '+-', to_di
         np.savetxt(fr'data/d={delta}_l={lamb}_e={eta}/{nx}x{ny}_S_{dir}_mag.txt', p_s)
         np.savetxt(fr'data/d={delta}_l={lamb}_e={eta}/{nx}x{ny}_S_{dir}_en.txt', p_x)
     
-    print(f'Max magnitude of the overlap: {np.max(p_s)}')
+    if _print:
+        print(f'Max magnitude of the overlap: {np.max(p_s)}')
     
     if graph_normalized:
         sizes = (p_s/np.max(p_s)*marker_s)
@@ -353,29 +368,29 @@ def plot_SDSF(scm = None, nx = 4, ny = 4, lamb = 1, delta = 1, dir = '+-', to_di
 if __name__ == "__main__":    
     scm = None
     
-    deltas = [1.]
+    deltas = [1., 2.]
     lambdas = [1., 0.]
     
-    """
-    variables = [1., .8, .6, .4, .2, 0.]
-    
-    for iv, var in enumerate(variables):
-        plt.subplot(2, 3, iv + 1)
-        plot_SDSF(scm, 4, 6, lamb=1., delta=1., eta=var, dir='+-', save=True)
-    
-    plt.show()
-    """
+    if True:
+        variables = [1., .8, .6, .4, .2, 0.]
+        variables = [1., .25, .5, .75, 0.]
+        
+        for iv, var in enumerate(variables):
+            plt.subplot(2, 3, iv + 1)
+            plot_SDSF(scm, 4, 4, lamb=0., delta=1., eta=var, dir='+-', k_lowest=20, save=True, _print = True)
+        
+        plt.show()
 
-    
-    start_time = time()
+    else:
+        start_time = time()
 
-    for id, delta in enumerate(deltas):
-        for il, lamb in enumerate(lambdas):
-            if delta != 0. or lamb != 0.:
-                plt.subplot(len(deltas), len(lambdas), il + 1 + len(lambdas) * id)
-                plot_SDSF(scm, 6, 4, lamb=lamb, delta=delta, dir='+-', eta = 0., save=True, k_lowest=100)
-    #plot_SDSF(scm, 4, 4, lamb=1., delta=1., dir='zz', marker_s=marker_size, graph_normalized=graph_normalized, to_diameter=to_diameter, save=False)
-    print(f'Execution time: {round(time() - start_time, 3)}s')
+        for id, delta in enumerate(deltas):
+            for il, lamb in enumerate(lambdas):
+                if delta != 0. or lamb != 0.:
+                    plt.subplot(len(deltas), len(lambdas), il + 1 + len(lambdas) * id)
+                    plot_SDSF(scm, 4, 4, lamb=lamb, delta=delta, dir='+-', eta = 0., save=True, k_lowest=100, _print = True)
+        #plot_SDSF(scm, 4, 4, lamb=1., delta=1., dir='zz', marker_s=marker_size, graph_normalized=graph_normalized, to_diameter=to_diameter, save=False)
+        print(f'Execution time: {round(time() - start_time, 3)}s')
 
-    plt.show()
-    
+        plt.show()
+
